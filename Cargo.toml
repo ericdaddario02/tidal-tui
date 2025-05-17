@@ -1,0 +1,10 @@
+[package]
+name = "tidal-tui"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "tidal_lib"
+
+[dependencies]
+pyo3 = "0.25.0"
