@@ -1,5 +1,31 @@
 use pyo3::prelude::*;
 
+/// Audio quality options in Tidal.
+pub enum AudioQuality {
+    /// 96 kbps
+    Low96,
+    /// 320 kbps
+    Low320,
+    /// 16-bit, 44.1 kHz
+    High,
+    // Max quality not currently supported.
+    // /// Up to 24-bit, 192 kHz
+    // Max,
+} 
+
+impl AudioQuality {
+    /// Returns the string used by the Python tidalapi corresponding to this audio quality setting.
+    fn to_tidalapi_string(&self) -> String {
+        match self {
+            Self::Low96 => String::from("LOW"),
+            Self::Low320 => String::from("HIGH"),
+            Self::High => String::from("LOSSLESS"),
+            // Max quality not currently supported.
+            // Self::Max => String::from("HI_RES_LOSSLES"),
+        }
+    }
+}
+
 /// A currently logged in Tidal session.
 #[derive(Debug)]
 pub struct Session {
@@ -45,9 +71,33 @@ impl Session {
         });
 
         match result {
-            Err(err) => return Err(format!("A Python exception occurred:\n{}", err.to_string())),
-            Ok(None) => return Err(String::from("Unable to login. Please try again later.")),
-            Ok(Some(session)) => return Ok(session)
+            Err(err) => Err(format!("A Python exception occurred:\n{}", err.to_string())),
+            Ok(None) => Err(String::from("Unable to login. Please try again later.")),
+            Ok(Some(session)) => Ok(session),
+        }
+    }
+
+    pub fn set_audio_quality(&self, quality: AudioQuality) -> Result<(), String> {
+        let result = Python::with_gil(|py| -> PyResult<()> {
+            let audio_quality_str = quality.to_tidalapi_string();
+            self.py_tidalapi_session.setattr(py, "audio_quality", audio_quality_str) 
+        });
+
+        match result {
+            Err(err) => Err(format!("A Python exception occurred:\n{}", err.to_string())),
+            _ => Ok(()),
+        }
+    }
+
+    pub fn get_track_url(&self, track_id: u32) -> Result<String, String> {
+        let result = Python::with_gil(|py| -> PyResult<String> {
+            let track = self.py_tidalapi_session.call_method1(py, "track", (track_id,))?;
+            track.call_method0(py, "get_url")?.extract(py)
+        });
+
+        match result {
+            Err(err) => Err(format!("A Python exception occurred:\n{}", err.to_string())),
+            Ok(track_url) => Ok(track_url),
         }
     }
 }
