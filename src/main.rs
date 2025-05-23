@@ -1,6 +1,7 @@
 use std::process;
 
-use tidal_lib::{AudioQuality, Session};
+use tidal_tui::rtidalapi;
+use rtidalapi::{AudioQuality, Session};
 
 fn main() {
     let session = Session::new_oauth().unwrap_or_else(|err| {
