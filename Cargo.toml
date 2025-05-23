@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 pyo3 = "0.25.0"
+rodio = { version = "0.20.1", default-features = false, features = ["symphonia-flac", "symphonia-aac", "symphonia-isomp4"] }
