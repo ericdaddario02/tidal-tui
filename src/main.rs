@@ -1,4 +1,6 @@
 use std::process;
+
+use souvlaki;
 use stream_download::{storage::{memory::MemoryStorageProvider}, Settings, StreamDownload};
 use tokio;
 use rodio::{Decoder, OutputStream, Sink};
@@ -27,9 +29,28 @@ async fn main() {
 
     println!("{track_url}");
 
+    // Setup audio player
     let (_stream, stream_handle) = OutputStream::try_default().unwrap();
     let sink = Sink::try_new(&stream_handle).unwrap();
     sink.set_volume(0.1);
+
+    // Setup media controls
+    let config = souvlaki::PlatformConfig {
+        dbus_name: "tidal-tui",
+        display_name: "tidal-tui",
+        hwnd: None,
+    };
+    let mut controls = souvlaki::MediaControls::new(config).unwrap();
+    controls.attach(|event| println!("Event received: {:?}", event)).unwrap();
+    controls.set_metadata(souvlaki::MediaMetadata { 
+        title: Some("this is the title"),
+        album: Some("album yo"),
+        artist: Some("best artist"),
+        ..Default::default()
+    }).unwrap();
+    controls.set_playback(souvlaki::MediaPlayback::Playing {
+        progress: Some(souvlaki::MediaPosition(std::time::Duration::from_secs(0)))
+    }).unwrap();
 
     play_stream_example(&sink, &track_url).await;
     // play_file_example(&sink);
