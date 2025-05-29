@@ -29,10 +29,10 @@ impl AudioQuality {
 /// A currently logged in Tidal session.
 #[derive(Debug)]
 pub struct Session {
-    pub access_token: String,
-    pub country_code: String,
+    access_token: String,
+    country_code: String,
     /// A reference to the tidalapi.Session Python object.
-    pub py_tidalapi_session: PyObject
+    py_tidalapi_session: PyObject
 }
 
 impl Session {
@@ -89,11 +89,27 @@ impl Session {
             _ => Ok(()),
         }
     }
+}
 
-    /// Gets the url used for playback for the given track with id `track_id`.
-    pub fn get_track_url(&self, track_id: u32) -> Result<String, String> {
+/// A Tidal track.
+pub struct Track<'a> {
+    session: &'a Session,
+    id: u32,
+}
+
+impl<'a> Track<'a> {
+    /// Returns a new `Track` from a track's id.
+    pub fn new(session: &'a Session, id: u32) -> Self {
+        Self {
+            session,
+            id,
+        }
+    }
+
+    /// Gets the url used for playback for this track.
+    pub fn get_url(&self) -> Result<String, String> {
         let result = Python::with_gil(|py| -> PyResult<String> {
-            let track = self.py_tidalapi_session.call_method1(py, "track", (track_id,))?;
+            let track = self.session.py_tidalapi_session.call_method1(py, "track", (self.id,))?;
             track.call_method0(py, "get_url")?.extract(py)
         });
 
