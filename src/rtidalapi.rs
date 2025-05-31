@@ -1,4 +1,7 @@
 use pyo3::prelude::*;
+use reqwest::blocking::Client;
+use serde::Deserialize;
+use serde_json::Value as JSONValue;
 
 /// Audio quality options in Tidal.
 pub enum AudioQuality {
@@ -31,11 +34,15 @@ impl AudioQuality {
 pub struct Session {
     access_token: String,
     country_code: String,
+    request_client: Client,
     /// A reference to the tidalapi.Session Python object.
     py_tidalapi_session: PyObject
 }
 
 impl Session {
+    /// Base URL of the public Tidal API.
+    const BASE_URL: &str = "https://openapi.tidal.com/v2";
+
     /// Prints a login link for the user, and returns a `Session` instance upon successful login.
     /// 
     /// Returns an `Err` if: (1) a Python exception occurs, or (2) the login was unsuccessul.
@@ -66,13 +73,14 @@ impl Session {
             Ok(Some(Self { 
                 access_token: access_token.unwrap(), 
                 country_code: country_code.unwrap(),
+                request_client: Client::new(),
                 py_tidalapi_session: session.unbind(),
             }))
         });
 
         match result {
             Err(err) => Err(format!("A Python exception occurred:\n{}", err.to_string())),
-            Ok(None) => Err(String::from("Unable to login. Please try again later.")),
+            Ok(None) => Err(String::from("Login failure")),
             Ok(Some(session)) => Ok(session),
         }
     }
@@ -89,21 +97,68 @@ impl Session {
             _ => Ok(()),
         }
     }
+
+    /// Makes a GET request to the public Tidal API.
+    /// 
+    /// Returns the JSON from key "data" in a successful response.
+    fn get(&self, endpoint: &str) -> Result<JSONValue, String> {
+        let url = format!("{}{}?countryCode={}", Self::BASE_URL, endpoint, self.country_code);
+        let res = self.request_client.get(url)
+            .bearer_auth(&self.access_token)
+            .send()
+            .map_err(|e| format!("Unable to send GET request to {}: {}", endpoint, e.to_string()))?;
+
+        if !res.status().is_success() {
+            return Err(format!("GET request to {} failed with status code {}", endpoint, res.status()));
+        }
+
+        let mut json: JSONValue = res.json()
+            .map_err(|e| format!("Unable to parse API response into JSON: {}", e.to_string()))?;
+        Ok(json["data"].take())
+    }
 }
 
 /// A Tidal track.
+#[derive(Debug)]
 pub struct Track<'a> {
     session: &'a Session,
-    id: u32,
+    pub id: u32,
+    #[allow(private_interfaces)]
+    pub attributes: TrackAttributes,
+}
+
+/// A track's API attributes.
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackAttributes {
+    pub title: String,
+    #[serde(default)]
+    pub version: String,
+    pub isrc: String,
+    pub duration: String,
+    pub copyright: String,
+    pub explicit: bool,
+    pub popularity: f32,
+    pub availability: Vec<String>,
+    pub media_tags: Vec<String>,
 }
 
 impl<'a> Track<'a> {
     /// Returns a new `Track` from a track's id.
-    pub fn new(session: &'a Session, id: u32) -> Self {
-        Self {
+    pub fn new(session: &'a Session, id: u32) -> Result<Self, String> {
+        let endpoint = format!("/tracks/{}", id);
+        let mut data_json = session.get(&endpoint)?;
+        let attributes_json = data_json["attributes"].take();
+
+        let attributes: TrackAttributes = serde_json::from_value(attributes_json)
+            .map_err(|e| format!("Unable to parse track API response: {}", e.to_string()))?;        
+
+        Ok(Self {
             session,
             id,
-        }
+            attributes,
+        })
     }
 
     /// Gets the url used for playback for this track.

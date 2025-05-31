@@ -16,7 +16,12 @@ fn main() {
         process::exit(1);
     }
 
-    let track = rtidalapi::Track::new(&session, 5120043);
+    let track = rtidalapi::Track::new(&session, 5120043).unwrap_or_else(|err| {
+        println!("{err}");
+        process::exit(1);
+    });
+
+    println!("{track:#?}");
 
     let track_url = track.get_url().unwrap_or_else(|err| {
         println!("{err}");
@@ -32,5 +37,7 @@ fn main() {
 
     player.play_new_track(track).unwrap();
 
-    loop {}
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
 }
