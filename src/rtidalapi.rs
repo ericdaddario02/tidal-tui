@@ -174,3 +174,48 @@ impl<'a> Track<'a> {
         }
     }
 }
+
+/// A Tidal album.
+#[derive(Debug)]
+pub struct Album<'a> {
+    session: &'a Session,
+    pub id: u32,
+    #[allow(private_interfaces)]
+    pub attributes: AlbumAttributes,
+}
+
+/// An album's API attributes.
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AlbumAttributes {
+    pub title: String,
+    pub barcode_id: String,
+    pub number_of_volumes: u32,
+    pub number_of_items: u32,
+    pub duration: String,
+    pub explicit: bool,
+    pub release_date: String,
+    pub copyright: String,
+    pub popularity: f32,
+    pub availability: Vec<String>,
+    pub media_tags: Vec<String>,
+}
+
+impl<'a> Album<'a> {
+    /// Returns a new `Album` from an album's id.
+    pub fn new(session: &'a Session, id: u32) -> Result<Self, String> {
+        let endpoint = format!("/albums/{}", id);
+        let mut data_json = session.get(&endpoint)?;
+        let attributes_json = data_json["attributes"].take();
+
+        let attributes: AlbumAttributes = serde_json::from_value(attributes_json)
+            .map_err(|e| format!("Unable to parse album API response: {}", e.to_string()))?;        
+
+        Ok(Self {
+            session,
+            id,
+            attributes,
+        })
+    }
+}
