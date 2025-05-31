@@ -16,10 +16,7 @@ fn main() {
         process::exit(1);
     }
 
-    let album = rtidalapi::Album::new(&session, 5120034).unwrap();
-    println!("{album:#?}");
-
-    let track = rtidalapi::Track::new(&session, 5120043).unwrap_or_else(|err| {
+    let track = rtidalapi::Track::new(&session, "5120043".to_string()).unwrap_or_else(|err| {
         println!("{err}");
         process::exit(1);
     });

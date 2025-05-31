@@ -8,8 +8,8 @@ use rodio::{
     OutputStreamHandle,
     Sink
 };
-use rtidalapi::Track;
-use souvlaki::MediaControls;
+use rtidalapi::{Album, Track};
+use souvlaki::{MediaControls, MediaMetadata};
 use stream_download::{
     storage::{memory::MemoryStorageProvider},
     Settings,
@@ -64,10 +64,9 @@ impl<'a> Player<'a> {
     }
 
     /// Replaces the current track with the given `Track` and starts playback.
-    pub fn play_new_track(&mut self, track: Track<'a>) -> Result<(), Box<dyn Error>> {
+    pub fn play_new_track(&mut self, mut track: Track<'a>) -> Result<(), Box<dyn Error>> {
         let track_url = track.get_url()?;
 
-        self.current_track = Some(track);
         self.sink.clear();
 
         let future = async {
@@ -84,6 +83,19 @@ impl<'a> Player<'a> {
             Ok::<(), Box<dyn Error>>(())
         };
         self.tokio_rt.block_on(future)?;
+
+        let track_title = track.attributes.title.clone();
+        let album_title = track.get_album()?.attributes.title.clone();
+
+        self.controls.set_metadata(MediaMetadata {
+            title: Some(&track_title),
+            album: Some(&album_title),
+            artist: Some("TODO"),
+            duration: None,
+            cover_url: None,
+        })?;
+
+        self.current_track = Some(track);
 
         Ok(())
     }

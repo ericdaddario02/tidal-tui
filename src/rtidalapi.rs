@@ -122,16 +122,20 @@ impl Session {
 #[derive(Debug)]
 pub struct Track<'a> {
     session: &'a Session,
-    pub id: u32,
+    pub id: String,
+
     #[allow(private_interfaces)]
     pub attributes: TrackAttributes,
+
+    // Used for caching album API call.
+    album: Option<Album<'a>>,
 }
 
 /// A track's API attributes.
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct TrackAttributes {
+pub struct TrackAttributes {
     pub title: String,
     #[serde(default)]
     pub version: String,
@@ -146,7 +150,7 @@ struct TrackAttributes {
 
 impl<'a> Track<'a> {
     /// Returns a new `Track` from a track's id.
-    pub fn new(session: &'a Session, id: u32) -> Result<Self, String> {
+    pub fn new(session: &'a Session, id: String) -> Result<Self, String> {
         let endpoint = format!("/tracks/{}", id);
         let mut data_json = session.get(&endpoint)?;
         let attributes_json = data_json["attributes"].take();
@@ -158,13 +162,14 @@ impl<'a> Track<'a> {
             session,
             id,
             attributes,
+            album: None,
         })
     }
 
     /// Gets the url used for playback for this track.
     pub fn get_url(&self) -> Result<String, String> {
         let result = Python::with_gil(|py| -> PyResult<String> {
-            let track = self.session.py_tidalapi_session.call_method1(py, "track", (self.id,))?;
+            let track = self.session.py_tidalapi_session.call_method1(py, "track", (&self.id,))?;
             track.call_method0(py, "get_url")?.extract(py)
         });
 
@@ -173,13 +178,37 @@ impl<'a> Track<'a> {
             Ok(track_url) => Ok(track_url),
         }
     }
+
+    /// Returns a reference to the `Album` associated with this track.
+    /// 
+    /// Note: This reference is owned by this `Track`.
+    pub fn get_album(&mut self) -> Result<&Album, String> {
+        let album_relationships_endpoint = format!("/tracks/{}/relationships/albums", self.id);
+        let data_json = self.session.get(&album_relationships_endpoint)?;
+        let albums = data_json.as_array()
+            .ok_or(String::from("Unable to parse album relationship API response"))?;
+
+        // For now, we assume that there is only one album associated with a track.
+        let album_json = albums.get(0)
+            .ok_or(String::from("Unable to parse album relationship API response"))?;
+        let album_id = album_json["id"]
+            .as_str()
+            .ok_or(String::from("Unable to parse album relationship API response"))?
+            .to_string();
+        
+        let album = Album::new(self.session, album_id)?;
+        self.album = Some(album);
+
+        Ok(&self.album.as_ref().unwrap())
+    }
 }
 
 /// A Tidal album.
 #[derive(Debug)]
 pub struct Album<'a> {
     session: &'a Session,
-    pub id: u32,
+    pub id: String,
+
     #[allow(private_interfaces)]
     pub attributes: AlbumAttributes,
 }
@@ -188,7 +217,7 @@ pub struct Album<'a> {
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AlbumAttributes {
+pub struct AlbumAttributes {
     pub title: String,
     pub barcode_id: String,
     pub number_of_volumes: u32,
@@ -204,7 +233,7 @@ struct AlbumAttributes {
 
 impl<'a> Album<'a> {
     /// Returns a new `Album` from an album's id.
-    pub fn new(session: &'a Session, id: u32) -> Result<Self, String> {
+    pub fn new(session: &'a Session, id: String) -> Result<Self, String> {
         let endpoint = format!("/albums/{}", id);
         let mut data_json = session.get(&endpoint)?;
         let attributes_json = data_json["attributes"].take();
