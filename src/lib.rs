@@ -66,6 +66,9 @@ impl<'a> Player<'a> {
     /// Replaces the current track with the given `Track` and starts playback.
     pub fn play_new_track(&mut self, track: Track<'a>) -> Result<(), Box<dyn Error>> {
         let track_url = track.get_url()?;
+        let track_title = &track.attributes.title;
+        let album_title = &track.get_album()?.attributes.title;
+        let artist_name = &track.get_artist()?.attributes.name;
 
         self.sink.clear();
 
@@ -84,13 +87,10 @@ impl<'a> Player<'a> {
         };
         self.tokio_rt.block_on(future)?;
 
-        let track_title = &track.attributes.title;
-        let album_title = &track.get_album()?.attributes.title;
-
         self.controls.set_metadata(MediaMetadata {
             title: Some(track_title),
             album: Some(album_title),
-            artist: Some("TODO"),
+            artist: Some(&artist_name),
             duration: None,
             cover_url: None,
         })?;

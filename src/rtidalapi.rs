@@ -124,12 +124,11 @@ impl Session {
 pub struct Track<'a> {
     session: &'a Session,
     pub id: String,
-
-    #[allow(private_interfaces)]
     pub attributes: TrackAttributes,
 
-    // Used for caching album API result.
+    // The following fields are used to cache relationship API results.
     album: OnceCell<Album<'a>>,
+    artist: OnceCell<Artist<'a>>,
 }
 
 /// A track's API attributes.
@@ -164,6 +163,7 @@ impl<'a> Track<'a> {
             id,
             attributes,
             album: OnceCell::new(),
+            artist: OnceCell::new(),
         })
     }
 
@@ -202,6 +202,29 @@ impl<'a> Track<'a> {
             Ok(album)
         })
     }
+
+    /// Returns a reference to the `Artist` associated with this track.
+    /// 
+    /// This `Artist` is then cached within `self`.
+    pub fn get_artist(&self) -> Result<&Artist, String> {
+        self.artist.get_or_try_init(|| -> Result<Artist, String> {
+            let artist_relationships_endpoint = format!("/tracks/{}/relationships/artists", self.id);
+            let data_json = self.session.get(&artist_relationships_endpoint)?;
+            let artists = data_json.as_array()
+                .ok_or(String::from("Unable to parse artist relationship API response"))?;
+
+            // For now, we assume that there is only one artist associated with a track.
+            let artist_json = artists.get(0)
+                .ok_or(String::from("Unable to parse artist relationship API response"))?;
+            let artist_id = artist_json["id"]
+                .as_str()
+                .ok_or(String::from("Unable to parse artist relationship API response"))?
+                .to_string();
+            
+            let artist = Artist::new(self.session, artist_id)?;
+            Ok(artist)
+        })
+    }
 }
 
 /// A Tidal album.
@@ -209,8 +232,6 @@ impl<'a> Track<'a> {
 pub struct Album<'a> {
     session: &'a Session,
     pub id: String,
-
-    #[allow(private_interfaces)]
     pub attributes: AlbumAttributes,
 }
 
@@ -241,6 +262,41 @@ impl<'a> Album<'a> {
 
         let attributes: AlbumAttributes = serde_json::from_value(attributes_json)
             .map_err(|e| format!("Unable to parse album API response: {}", e.to_string()))?;        
+
+        Ok(Self {
+            session,
+            id,
+            attributes,
+        })
+    }
+}
+
+/// A Tidal artist.
+#[derive(Debug)]
+pub struct Artist<'a> {
+    session: &'a Session,
+    pub id: String,
+    pub attributes: ArtistAttributes,
+}
+
+/// An artist's API attributes.
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtistAttributes {
+    pub name: String,
+    pub popularity: f32,
+}
+
+impl<'a> Artist<'a> {
+    /// Returns a new `Artist` from an artist's id.
+    pub fn new(session: &'a Session, id: String) -> Result<Self, String> {
+        let endpoint = format!("/artists/{}", id);
+        let mut data_json = session.get(&endpoint)?;
+        let attributes_json = data_json["attributes"].take();
+
+        let attributes: ArtistAttributes = serde_json::from_value(attributes_json)
+            .map_err(|e| format!("Unable to parse artist API response: {}", e.to_string()))?;        
 
         Ok(Self {
             session,
