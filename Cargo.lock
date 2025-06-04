@@ -1922,6 +1922,7 @@ dependencies = [
 name = "tidal-tui"
 version = "0.1.0"
 dependencies = [
+ "once_cell",
  "pyo3",
  "reqwest",
  "rodio",

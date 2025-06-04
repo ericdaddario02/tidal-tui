@@ -1,3 +1,4 @@
+use once_cell::unsync::OnceCell;
 use pyo3::prelude::*;
 use reqwest::blocking::Client;
 use serde::Deserialize;
@@ -127,8 +128,8 @@ pub struct Track<'a> {
     #[allow(private_interfaces)]
     pub attributes: TrackAttributes,
 
-    // Used for caching album API call.
-    album: Option<Album<'a>>,
+    // Used for caching album API result.
+    album: OnceCell<Album<'a>>,
 }
 
 /// A track's API attributes.
@@ -162,7 +163,7 @@ impl<'a> Track<'a> {
             session,
             id,
             attributes,
-            album: None,
+            album: OnceCell::new(),
         })
     }
 
@@ -181,25 +182,25 @@ impl<'a> Track<'a> {
 
     /// Returns a reference to the `Album` associated with this track.
     /// 
-    /// Note: This reference is owned by this `Track`.
-    pub fn get_album(&mut self) -> Result<&Album, String> {
-        let album_relationships_endpoint = format!("/tracks/{}/relationships/albums", self.id);
-        let data_json = self.session.get(&album_relationships_endpoint)?;
-        let albums = data_json.as_array()
-            .ok_or(String::from("Unable to parse album relationship API response"))?;
+    /// This `Album` is then cached within `self`.
+    pub fn get_album(&self) -> Result<&Album, String> {
+        self.album.get_or_try_init(|| -> Result<Album, String> {
+            let album_relationships_endpoint = format!("/tracks/{}/relationships/albums", self.id);
+            let data_json = self.session.get(&album_relationships_endpoint)?;
+            let albums = data_json.as_array()
+                .ok_or(String::from("Unable to parse album relationship API response"))?;
 
-        // For now, we assume that there is only one album associated with a track.
-        let album_json = albums.get(0)
-            .ok_or(String::from("Unable to parse album relationship API response"))?;
-        let album_id = album_json["id"]
-            .as_str()
-            .ok_or(String::from("Unable to parse album relationship API response"))?
-            .to_string();
-        
-        let album = Album::new(self.session, album_id)?;
-        self.album = Some(album);
-
-        Ok(&self.album.as_ref().unwrap())
+            // For now, we assume that there is only one album associated with a track.
+            let album_json = albums.get(0)
+                .ok_or(String::from("Unable to parse album relationship API response"))?;
+            let album_id = album_json["id"]
+                .as_str()
+                .ok_or(String::from("Unable to parse album relationship API response"))?
+                .to_string();
+            
+            let album = Album::new(self.session, album_id)?;
+            Ok(album)
+        })
     }
 }
 
