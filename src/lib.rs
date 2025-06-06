@@ -131,19 +131,22 @@ impl Player {
     /// Replaces the current track with the given `Track` and starts playback.
     pub fn play_new_track(&mut self, track: Track) -> Result<(), Box<dyn Error>> {
         let track_url = track.get_url()?;
+        let album = track.get_album()?;
+
         let track_title = &track.attributes.title;
-        let album_title = &track.get_album()?.attributes.title;
+        let album_title = &album.attributes.title;
         let artist_name = &track.get_artist()?.attributes.name;
         let duration = track.get_duration();
+        let cover_url = &album.image_link;
 
         self.sink.clear();
 
         self.controls.set_metadata(MediaMetadata {
             title: Some(track_title),
             album: Some(album_title),
-            artist: Some(&artist_name),
+            artist: Some(artist_name),
             duration: Some(duration),
-            cover_url: None,
+            cover_url: Some(cover_url),
         })?;
         self.controls.set_playback(MediaPlayback::Playing { progress: None })?;
         self.is_playing = true;

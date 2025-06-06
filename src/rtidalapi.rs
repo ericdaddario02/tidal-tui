@@ -262,6 +262,7 @@ pub struct Album {
     session: Arc<Session>,
     pub id: String,
     pub attributes: AlbumAttributes,
+    pub image_link: String,
 }
 
 /// An album's API attributes.
@@ -287,7 +288,16 @@ impl Album {
     pub fn new(session: Arc<Session>, id: String) -> Result<Self, String> {
         let endpoint = format!("/albums/{}", id);
         let mut data_json = session.get(&endpoint)?;
-        let attributes_json = data_json["attributes"].take();
+        let mut attributes_json = data_json["attributes"].take();
+
+        let image_links_json = attributes_json["imageLinks"].take();
+        // The first image link should be the highest res.
+        let image_link_json = image_links_json.get(0)
+                .ok_or(String::from("Unable to parse album API response"))?;
+        let image_link = image_link_json["href"]
+            .as_str()
+            .ok_or(String::from("Unable to parse album API response"))?
+            .to_string();
 
         let attributes: AlbumAttributes = serde_json::from_value(attributes_json)
             .map_err(|e| format!("Unable to parse album API response: {}", e.to_string()))?;        
@@ -296,6 +306,7 @@ impl Album {
             session,
             id,
             attributes,
+            image_link,
         })
     }
 
