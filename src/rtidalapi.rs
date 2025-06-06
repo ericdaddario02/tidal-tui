@@ -1,14 +1,32 @@
 use std::{
+    collections::HashMap,
+    error::Error,
+    fs,
     sync::Arc,
     time::Duration
 };
 
+use oauth2::{
+    AuthorizationCode,
+    AuthUrl,
+    basic::BasicClient,
+    ClientId,
+    ClientSecret,
+    CsrfToken,
+    PkceCodeChallenge,
+    RedirectUrl,
+    Scope,
+    TokenResponse,
+    TokenUrl
+};
 use once_cell::sync::OnceCell;
-use pyo3::prelude::*;
+use pyo3::{prelude::*, types::IntoPyDict};
 use regex::Regex;
 use reqwest::blocking::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JSONValue;
+use toml;
+use url::Url;
 
 /// Audio quality options in Tidal.
 pub enum AudioQuality {
@@ -36,14 +54,22 @@ impl AudioQuality {
     }
 }
 
+/// Struct used to persist session info.
+#[derive(Deserialize, Serialize)]
+struct TidalSessionInfo {
+    access_token: String,
+    refresh_token: String,
+}
+
 /// A currently logged in Tidal session.
 #[derive(Debug)]
 pub struct Session {
     access_token: String,
     country_code: String,
+    user_id: String,
     request_client: Client,
-    /// A reference to the tidalapi.Session Python object.
-    py_tidalapi_session: PyObject
+    // /// A reference to the tidalapi.Session Python object.
+    // py_tidalapi_session: PyObject
 }
 
 impl Session {
@@ -64,7 +90,8 @@ impl Session {
             let path_type = pathlib.getattr("Path")?;
             let oauth_file_path = path_type.call1(("tidal-session-oauth.json",))?;
 
-            let login_result = session.call_method1("login_session_file", (oauth_file_path,))?;
+            let kwargs = vec![("do_pkce", "true")];
+            let login_result = session.call_method("login_session_file", (oauth_file_path,), Some(&kwargs.into_py_dict(py)?))?;
             let login_result: bool = login_result.extract()?;
             if login_result == false {
                 return Ok(None);
@@ -72,16 +99,18 @@ impl Session {
 
             let access_token: Option<String> = session.getattr("access_token")?.extract()?;
             let country_code: Option<String> = session.getattr("country_code")?.extract()?;
+            let user_id: Option<u32> = session.getattr("user")?.getattr("id")?.extract()?;
 
-            if access_token.is_none() || country_code.is_none() {
+            if access_token.is_none() || country_code.is_none() || user_id.is_none() {
                 return Ok(None);
             }
 
             Ok(Some(Self { 
                 access_token: access_token.unwrap(), 
                 country_code: country_code.unwrap(),
+                user_id: user_id.unwrap().to_string(),
                 request_client: Client::new(),
-                py_tidalapi_session: session.unbind(),
+                // py_tidalapi_session: session.unbind(),
             }))
         });
 
@@ -92,11 +121,159 @@ impl Session {
         }
     }
 
+    /// Returns a new logged in `Session`.
+    pub fn new(client_id: &str, client_secret: &str) -> Result<Self, String> {
+        let request_client = Client::new();
+
+        let session_exists = fs::exists("tidal-session.toml")
+            .map_err(|e| format!("{e}"))?;
+        
+        let tidal_session: TidalSessionInfo = if session_exists {
+            // Restore existing Tidal session.
+            let toml_str = fs::read_to_string("tidal-session.toml")
+                .map_err(|e| format!("{e}"))?;
+            let existing_session: TidalSessionInfo = toml::from_str(&toml_str)
+                .map_err(|e| format!("{e}"))?;
+
+            // Get new access token from existing refresh token.
+            let mut body = HashMap::new();
+            body.insert("grant_type", "refresh_token");
+            body.insert("refresh_token", &existing_session.refresh_token);
+            body.insert("client_id", &client_id);
+            let res = request_client.post("https://auth.tidal.com/v1/oauth2/token")
+                .form(&body)
+                .send()
+                .map_err(|e| format!("Unable to get new access token with refresh token: {}", e.to_string()))?;
+            
+            let json: JSONValue = res.json()
+                .map_err(|e| format!("Unable to parse API response into JSON: {}", e.to_string()))?;
+            println!("{json:#?}");
+            let new_access_token = json["access_token"].as_str()
+                .ok_or("Failed to get access token")?
+                .to_string();
+
+            TidalSessionInfo {
+                access_token: new_access_token,
+                refresh_token: existing_session.refresh_token,
+            }
+        } else {
+            // Create a new Tidal session by having the user login with their credentials.
+            Self::login_ouath_pkce(client_id, client_secret)
+                .map_err(|e| format!("{e}"))?
+        };
+
+        // Store Tidal session info to file.
+        let toml_str = toml::to_string(&tidal_session)
+            .map_err(|e| format!("{e}"))?;
+        fs::write("tidal-session.toml", toml_str)
+            .map_err(|e| format!("{e}"))?;
+
+        // Get user_id and country_code.
+        let users_me_endpoint = "/users/me";
+        let url = format!("{}{}", Self::BASE_URL, users_me_endpoint);
+        let res = request_client.get(url)
+            .bearer_auth(&tidal_session.access_token)
+            .send()
+            .map_err(|e| format!("Unable to send GET request to {}: {}", users_me_endpoint, e.to_string()))?;
+
+        let mut json: JSONValue = res.json()
+            .map_err(|e| format!("Unable to parse API response into JSON: {}", e.to_string()))?;
+        let mut data_json = json["data"].take();
+
+        let user_id = data_json["id"].as_str()
+            .ok_or("Failed to get user id")?
+            .to_string();
+        let country_code = data_json["attributes"].take()["country"].as_str()
+            .ok_or("Failed to get country code")?
+            .to_string();
+
+        Ok(Self {
+            access_token: tidal_session.access_token,
+            country_code,
+            user_id,
+            request_client,
+        })
+    }
+
+    fn login_ouath_pkce(client_id: &str, client_secret: &str) -> Result<TidalSessionInfo, Box<dyn Error>> {
+        // Create an OAuth2 client.
+        let client = BasicClient::new(ClientId::new(client_id.to_string()))
+            .set_client_secret(ClientSecret::new(client_secret.to_string()))
+            .set_auth_uri(AuthUrl::new("https://login.tidal.com/authorize".to_string())?)
+            .set_token_uri(TokenUrl::new("https://auth.tidal.com/v1/oauth2/token".to_string())?)
+            .set_redirect_uri(RedirectUrl::new("http://localhost".to_string())?);
+
+        let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
+
+        // Generate the full authorization URL.
+        let (auth_url, csrf_token) = client
+            .authorize_url(CsrfToken::new_random)
+            .add_scope(Scope::new("user.read".to_string()))
+            .add_scope(Scope::new("collection.read".to_string()))
+            .add_scope(Scope::new("collection.write".to_string()))
+            .add_scope(Scope::new("playlists.read".to_string()))
+            .add_scope(Scope::new("playlists.write".to_string()))
+            .set_pkce_challenge(pkce_challenge)
+            .url();
+
+        println!("Please open this URL in your web browser to login to Tidal:");
+        println!("\n{}\n", auth_url);
+        println!("After logging in, copy the entire URL from your browser's address bar, paste it here, and press <ENTER>:");
+
+        // Parse redirect URL.
+        let mut redirect_url = String::new();
+        std::io::stdin().read_line(&mut redirect_url)?;
+        let pasted_redirect_url = redirect_url.trim();
+        let parsed_redirect_url = Url::parse(pasted_redirect_url)?;
+
+        let (received_code, received_state) = {
+            let query_pairs: std::collections::HashMap<_, _> = parsed_redirect_url
+                .query_pairs()
+                .collect();
+
+            let code = AuthorizationCode::new(
+                query_pairs.get("code")
+                    .ok_or("No 'code' parameter found in redirect URL")?
+                    .to_string(),
+            );
+            let state = CsrfToken::new(
+                query_pairs.get("state")
+                    .ok_or("No 'state' parameter found in redirect URL")?
+                    .to_string(),
+            );
+            (code, state)
+        };
+
+        if received_state.secret() != csrf_token.secret() {
+            return Err("CSRF token mismatch".into());
+        }
+
+        let http_client = reqwest::blocking::ClientBuilder::new()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("Client should build");
+
+        let token_result = 
+            client
+                .exchange_code(received_code)
+                .set_pkce_verifier(pkce_verifier)
+                .request(&http_client)?;
+
+        let access_token = token_result.access_token().secret().to_string();
+        let refresh_token = token_result.refresh_token().ok_or("No refresh token")?.secret().to_string();
+        
+        Ok(TidalSessionInfo {
+            access_token,
+            refresh_token
+        })
+    }
+
     /// Sets the audio quality setting used for playback.
     pub fn set_audio_quality(&self, quality: AudioQuality) -> Result<(), String> {
         let result = Python::with_gil(|py| -> PyResult<()> {
             let audio_quality_str = quality.to_tidalapi_string();
-            self.py_tidalapi_session.setattr(py, "audio_quality", audio_quality_str) 
+            // self.py_tidalapi_session.setattr(py, "audio_quality", audio_quality_str)
+            Ok(())
         });
 
         match result {
@@ -175,15 +352,16 @@ impl Track {
 
     /// Gets the url used for playback for this track.
     pub fn get_url(&self) -> Result<String, String> {
-        let result = Python::with_gil(|py| -> PyResult<String> {
-            let track = self.session.py_tidalapi_session.call_method1(py, "track", (&self.id,))?;
-            track.call_method0(py, "get_url")?.extract(py)
-        });
+        // let result = Python::with_gil(|py| -> PyResult<String> {
+        //     let track = self.session.py_tidalapi_session.call_method1(py, "track", (&self.id,))?;
+        //     track.call_method0(py, "get_url")?.extract(py)
+        // });
 
-        match result {
-            Err(err) => Err(format!("A Python exception occurred:\n{}", err.to_string())),
-            Ok(track_url) => Ok(track_url),
-        }
+        // match result {
+        //     Err(err) => Err(format!("A Python exception occurred:\n{}", err.to_string())),
+        //     Ok(track_url) => Ok(track_url),
+        // }
+        Ok(String::new())
     }
 
     /// Returns a reference to the `Album` associated with this track.
