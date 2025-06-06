@@ -1,6 +1,11 @@
 pub mod rtidalapi;
 
-use std::error::Error;
+use std::{
+    error::Error,
+    sync::{Arc, mpsc, Mutex},
+    thread,
+    time::Duration
+};
 
 use rodio::{
     Decoder,
@@ -9,26 +14,41 @@ use rodio::{
     Sink
 };
 use rtidalapi::Track;
-use souvlaki::{MediaControls, MediaMetadata};
+use souvlaki::{
+    MediaControlEvent,
+    MediaControls,
+    MediaMetadata,
+    MediaPlayback,
+    MediaPosition
+};
 use stream_download::{
-    storage::{memory::MemoryStorageProvider},
+    storage::memory::MemoryStorageProvider,
     Settings,
     StreamDownload
 };
 use tokio;
 
-/// Object responsible for playing audio and handling playback.
-pub struct Player<'a> {
+/// Wrapper for rodio OutputStream so Player can be Send+Sync.
+struct PlayerOutputStreamWrapper {
     _stream: OutputStream,
+}
+unsafe impl Send for PlayerOutputStreamWrapper {}
+unsafe impl Sync for PlayerOutputStreamWrapper {}
+
+/// Object responsible for playing audio and handling playback.
+pub struct Player {
+    _stream: PlayerOutputStreamWrapper,
     _stream_handle: OutputStreamHandle,
     sink: Sink,
-    tokio_rt: tokio::runtime::Runtime,
     controls: MediaControls,
-    current_track: Option<Track<'a>>,
-    queue: Vec<Track<'a>>,
+    tokio_rt: tokio::runtime::Runtime,
+    current_track: Option<Track>,
+    queue: Vec<Track>,
+    position: Duration,
+    is_playing: bool,
 }
 
-impl<'a> Player<'a> {
+impl Player {
     /// Set max volume because otherwise it is way too loud.
     const MAX_VOLUME: f32 = 0.15;
 
@@ -36,35 +56,80 @@ impl<'a> Player<'a> {
     pub fn new() -> Result<Self, Box<dyn Error>> {
         let tokio_rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
 
-        // Rodio setup.
         let (_stream, _stream_handle) = OutputStream::try_default()?;
         let sink = Sink::try_new(&_stream_handle)?;
         sink.set_volume(Self::MAX_VOLUME / 2.0);
 
-        // Souvlaki setup.
         let config = souvlaki::PlatformConfig {
             dbus_name: "tidal-tui",
             display_name: "tidal-tui",
             hwnd: None,
         };
-        let mut controls = souvlaki::MediaControls::new(config)
-            .map_err(|e| format!("{e:#?}"))?;
-        controls.attach(|event| { println!("Event received: {:?}", event)})
+        let controls = souvlaki::MediaControls::new(config)
             .map_err(|e| format!("{e:#?}"))?;
 
         Ok(Self {
-            _stream,
+            _stream: PlayerOutputStreamWrapper { _stream },
             _stream_handle,
             sink,
             tokio_rt,
             controls,
             current_track: None,
             queue: vec![],
+            position: Duration::from_secs(0),
+            is_playing: false,
         })
     }
 
+    /// Spawns another thread to poll for playback position updates and media control events.
+    pub fn start_polling_thread(player: Arc<Mutex<Self>>) -> Result<(), Box<dyn Error>> {
+        let (tx, rx) = mpsc::channel();
+
+        {
+            let mut locked_player = player.lock()
+                .map_err(|e| format!("{e:#?}"))?;
+            locked_player.controls.attach(move |event| { tx.send(event).unwrap(); })?;
+        }
+
+        thread::spawn(move || {
+            loop {
+                {
+                    let mut locked_player = player.lock().unwrap();
+                    if locked_player.is_playing {
+                        let position = locked_player.sink.get_pos();
+                        locked_player.position = position;
+                        locked_player.controls.set_playback(MediaPlayback::Playing { progress: Some(MediaPosition(position)) }).unwrap();
+                    }
+                }
+                
+                if let Ok(event) = rx.try_recv() {
+                    let mut locked_player = player.lock().unwrap();
+                    let position = locked_player.position;
+
+                    match event {
+                        MediaControlEvent::Pause => {
+                            locked_player.is_playing = false;
+                            locked_player.controls.set_playback(MediaPlayback::Paused { progress: Some(MediaPosition(position)) }).unwrap_or_else(|e| println!("Can't set paused: {e:?}"));
+                            locked_player.sink.pause();
+                        },
+                        MediaControlEvent::Play => {
+                            locked_player.is_playing = true;
+                            locked_player.controls.set_playback(MediaPlayback::Playing { progress: Some(MediaPosition(position)) }).unwrap();
+                            locked_player.sink.play();
+                        },
+                        _ => {},
+                    }
+                }
+
+                thread::sleep(Duration::from_millis(100));
+            }
+        });
+
+        Ok(())
+    }
+
     /// Replaces the current track with the given `Track` and starts playback.
-    pub fn play_new_track(&mut self, track: Track<'a>) -> Result<(), Box<dyn Error>> {
+    pub fn play_new_track(&mut self, track: Track) -> Result<(), Box<dyn Error>> {
         let track_url = track.get_url()?;
         let track_title = &track.attributes.title;
         let album_title = &track.get_album()?.attributes.title;
@@ -72,6 +137,16 @@ impl<'a> Player<'a> {
         let duration = track.get_duration();
 
         self.sink.clear();
+
+        self.controls.set_metadata(MediaMetadata {
+            title: Some(track_title),
+            album: Some(album_title),
+            artist: Some(&artist_name),
+            duration: Some(duration),
+            cover_url: None,
+        })?;
+        self.controls.set_playback(MediaPlayback::Playing { progress: None })?;
+        self.is_playing = true;
 
         let future = async {
             let reader = StreamDownload::new_http(
@@ -87,14 +162,6 @@ impl<'a> Player<'a> {
             Ok::<(), Box<dyn Error>>(())
         };
         self.tokio_rt.block_on(future)?;
-
-        self.controls.set_metadata(MediaMetadata {
-            title: Some(track_title),
-            album: Some(album_title),
-            artist: Some(&artist_name),
-            duration: Some(duration),
-            cover_url: None,
-        })?;
 
         self.current_track = Some(track);
 

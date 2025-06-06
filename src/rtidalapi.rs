@@ -1,6 +1,9 @@
-use std::time::Duration;
+use std::{
+    sync::Arc,
+    time::Duration
+};
 
-use once_cell::unsync::OnceCell;
+use once_cell::sync::OnceCell;
 use pyo3::prelude::*;
 use regex::Regex;
 use reqwest::blocking::Client;
@@ -124,14 +127,14 @@ impl Session {
 
 /// A Tidal track.
 #[derive(Debug)]
-pub struct Track<'a> {
-    session: &'a Session,
+pub struct Track {
+    session: Arc<Session>,
     pub id: String,
     pub attributes: TrackAttributes,
 
     // The following fields are used to cache relationship API results.
-    album: OnceCell<Album<'a>>,
-    artist: OnceCell<Artist<'a>>,
+    album: OnceCell<Album>,
+    artist: OnceCell<Artist>,
 }
 
 /// A track's API attributes.
@@ -151,9 +154,9 @@ pub struct TrackAttributes {
     pub media_tags: Vec<String>,
 }
 
-impl<'a> Track<'a> {
+impl Track {
     /// Returns a new `Track` from a track's id.
-    pub fn new(session: &'a Session, id: String) -> Result<Self, String> {
+    pub fn new(session: Arc<Session>, id: String) -> Result<Self, String> {
         let endpoint = format!("/tracks/{}", id);
         let mut data_json = session.get(&endpoint)?;
         let attributes_json = data_json["attributes"].take();
@@ -201,7 +204,7 @@ impl<'a> Track<'a> {
                 .ok_or(String::from("Unable to parse album relationship API response"))?
                 .to_string();
             
-            let album = Album::new(self.session, album_id)?;
+            let album = Album::new(Arc::clone(&self.session), album_id)?;
             Ok(album)
         })
     }
@@ -224,7 +227,7 @@ impl<'a> Track<'a> {
                 .ok_or(String::from("Unable to parse artist relationship API response"))?
                 .to_string();
             
-            let artist = Artist::new(self.session, artist_id)?;
+            let artist = Artist::new(Arc::clone(&self.session), artist_id)?;
             Ok(artist)
         })
     }
@@ -255,8 +258,8 @@ impl<'a> Track<'a> {
 
 /// A Tidal album.
 #[derive(Debug)]
-pub struct Album<'a> {
-    session: &'a Session,
+pub struct Album {
+    session: Arc<Session>,
     pub id: String,
     pub attributes: AlbumAttributes,
 }
@@ -279,9 +282,9 @@ pub struct AlbumAttributes {
     pub media_tags: Vec<String>,
 }
 
-impl<'a> Album<'a> {
+impl Album {
     /// Returns a new `Album` from an album's id.
-    pub fn new(session: &'a Session, id: String) -> Result<Self, String> {
+    pub fn new(session: Arc<Session>, id: String) -> Result<Self, String> {
         let endpoint = format!("/albums/{}", id);
         let mut data_json = session.get(&endpoint)?;
         let attributes_json = data_json["attributes"].take();
@@ -322,8 +325,8 @@ impl<'a> Album<'a> {
 
 /// A Tidal artist.
 #[derive(Debug)]
-pub struct Artist<'a> {
-    session: &'a Session,
+pub struct Artist {
+    session: Arc<Session>,
     pub id: String,
     pub attributes: ArtistAttributes,
 }
@@ -337,9 +340,9 @@ pub struct ArtistAttributes {
     pub popularity: f32,
 }
 
-impl<'a> Artist<'a> {
+impl Artist {
     /// Returns a new `Artist` from an artist's id.
-    pub fn new(session: &'a Session, id: String) -> Result<Self, String> {
+    pub fn new(session: Arc<Session>, id: String) -> Result<Self, String> {
         let endpoint = format!("/artists/{}", id);
         let mut data_json = session.get(&endpoint)?;
         let attributes_json = data_json["attributes"].take();

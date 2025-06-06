@@ -1,13 +1,16 @@
-use std::process;
+use std::{
+    process,
+    sync::{Arc, Mutex}
+};
 
 use tidal_tui::{rtidalapi, Player};
 use rtidalapi::{AudioQuality, Session};
 
 fn main() {
-    let session = Session::new_oauth().unwrap_or_else(|err| {
+    let session = Arc::new(Session::new_oauth().unwrap_or_else(|err| {
         println!("{err}");
         process::exit(1);
-    });
+    }));
 
     println!("{session:#?}");
 
@@ -16,7 +19,7 @@ fn main() {
         process::exit(1);
     }
 
-    let track = rtidalapi::Track::new(&session, "5120043".to_string()).unwrap_or_else(|err| {
+    let track = rtidalapi::Track::new(Arc::clone(&session), "5120043".to_string()).unwrap_or_else(|err| {
         println!("{err}");
         process::exit(1);
     });
@@ -30,12 +33,14 @@ fn main() {
 
     println!("{track_url}");
 
-    let mut player = Player::new().unwrap_or_else(|_err| {
+    let player = Arc::new(Mutex::new(Player::new().unwrap_or_else(|_err| {
         println!("Failed to create Player.");
         process::exit(1);
-    });
+    })));
 
-    player.play_new_track(track).unwrap();
+    Player::start_polling_thread(Arc::clone(&player)).unwrap();
+
+    player.lock().unwrap().play_new_track(track).unwrap();
 
     loop {
         std::thread::sleep(std::time::Duration::from_secs(1));
