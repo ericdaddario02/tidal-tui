@@ -69,6 +69,7 @@ impl<'a> Player<'a> {
         let track_title = &track.attributes.title;
         let album_title = &track.get_album()?.attributes.title;
         let artist_name = &track.get_artist()?.attributes.name;
+        let duration = track.get_duration();
 
         self.sink.clear();
 
@@ -91,7 +92,7 @@ impl<'a> Player<'a> {
             title: Some(track_title),
             album: Some(album_title),
             artist: Some(&artist_name),
-            duration: None,
+            duration: Some(duration),
             cover_url: None,
         })?;
 

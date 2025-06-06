@@ -1,5 +1,8 @@
+use std::time::Duration;
+
 use once_cell::unsync::OnceCell;
 use pyo3::prelude::*;
+use regex::Regex;
 use reqwest::blocking::Client;
 use serde::Deserialize;
 use serde_json::Value as JSONValue;
@@ -225,6 +228,29 @@ impl<'a> Track<'a> {
             Ok(artist)
         })
     }
+
+    /// Returns a `Duration` corresponding this `Album`'s duration attribute.
+    pub fn get_duration(&self) -> Duration {
+        let re = Regex::new(r"^PT((?<hours>\d+)H)*((?<mins>\d+)M)*((?<secs>\d+)S)*$").unwrap();
+        let Some(captures) = re.captures(&self.attributes.duration) else {
+            return Duration::from_secs(0);
+        };
+
+        let hours: u64 = match captures.name("hours") {
+            None => 0,
+            Some(hours_match) => hours_match.as_str().parse().unwrap_or(0),
+        };
+        let mins: u64 = match captures.name("mins") {
+            None => 0,
+            Some(mins_match) => mins_match.as_str().parse().unwrap_or(0),
+        };
+        let secs: u64 = match captures.name("secs") {
+            None => 0,
+            Some(secs_match) => secs_match.as_str().parse().unwrap_or(0),
+        };
+    
+        Duration::from_secs((hours * 60 * 60) + (mins * 60) + (secs))
+    }
 }
 
 /// A Tidal album.
@@ -268,6 +294,29 @@ impl<'a> Album<'a> {
             id,
             attributes,
         })
+    }
+
+    /// Returns a `Duration` corresponding this `Album`'s duration attribute.
+    pub fn get_duration(&self) -> Duration {
+        let re = Regex::new(r"^PT((?<hours>\d+)H)*((?<mins>\d+)M)*((?<secs>\d+)S)*$").unwrap();
+        let Some(captures) = re.captures(&self.attributes.duration) else {
+            return Duration::from_secs(0);
+        };
+
+        let hours: u64 = match captures.name("hours") {
+            None => 0,
+            Some(hours_match) => hours_match.as_str().parse().unwrap_or(0),
+        };
+        let mins: u64 = match captures.name("mins") {
+            None => 0,
+            Some(mins_match) => mins_match.as_str().parse().unwrap_or(0),
+        };
+        let secs: u64 = match captures.name("secs") {
+            None => 0,
+            Some(secs_match) => secs_match.as_str().parse().unwrap_or(0),
+        };
+
+        Duration::from_secs((hours * 60 * 60) + (mins * 60) + (secs))
     }
 }
 
