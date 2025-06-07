@@ -1,16 +1,25 @@
 use std::{
+    env,
     process,
     sync::{Arc, Mutex}
 };
+
+use dotenv::dotenv;
 
 use tidal_tui::{rtidalapi, Player};
 use rtidalapi::{AudioQuality, Session};
 
 fn main() {
-    let session = Arc::new(Session::new_oauth().unwrap_or_else(|err| {
-        println!("{err}");
-        process::exit(1);
-    }));
+    // Reads the .env file.
+    dotenv().ok();
+
+    let session = Arc::new(
+        Session::new(&env::var("TIDAL_CLIENT_ID").unwrap(), &env::var("TIDAL_CLIENT_SECRET").unwrap())
+            .unwrap_or_else(|err| {
+                println!("{err}");
+                process::exit(1);
+            })
+    );
 
     println!("{session:#?}");
 

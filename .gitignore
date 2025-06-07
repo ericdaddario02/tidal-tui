@@ -1,3 +1,5 @@
 /target
 /venv
-tidal-session-oauth.json
+tidal-session.toml
+unofficial-tidal-session.json
+.env
