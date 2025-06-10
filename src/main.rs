@@ -23,6 +23,13 @@ fn main() {
 
     println!("{session:#?}");
 
+    let user = rtidalapi::User::get_current_user(Arc::clone(&session)).unwrap_or_else(|err| {
+        println!("{err}");
+        process::exit(1);
+    });
+
+    println!("{user:#?}");
+
     if let Err(err) = session.set_audio_quality(AudioQuality::High) {
         println!("{err}");
         process::exit(1);

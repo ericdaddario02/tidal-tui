@@ -39,7 +39,6 @@ pub struct Session {
     access_token: String,
     pkce_access_token: String,
     country_code: String,
-    user_id: String,
     request_client: Client,
     /// A reference to the tidalapi.Session Python object. Used for the unofficial Tidal API.
     pub(super) py_tidalapi_session: PyObject
@@ -48,6 +47,8 @@ pub struct Session {
 impl Session {
     /// Base URL of the official Tidal API.
     const BASE_URL: &str = "https://openapi.tidal.com/v2";
+    /// Base URL of the unofficial Tidal API.
+    const UNOFFICIAL_BASE_URL: &str = "https://api.tidal.com/v1";
 
     /// Returns a new logged in `Session`.
     /// 
@@ -97,33 +98,13 @@ impl Session {
         fs::write("tidal-session.toml", toml_str)
             .map_err(|e| format!("{e}"))?;
 
-        // Get user_id and country_code.
-        let users_me_endpoint = "/users/me";
-        let url = format!("{}{}", Self::BASE_URL, users_me_endpoint);
-        let res = request_client.get(url)
-            .bearer_auth(&pkce_session.access_token)
-            .send()
-            .map_err(|e| format!("Unable to send GET request to {}: {}", users_me_endpoint, e.to_string()))?;
-
-        let mut json: JSONValue = res.json()
-            .map_err(|e| format!("Unable to parse API response into JSON: {}", e.to_string()))?;
-        let mut data_json = json["data"].take();
-
-        let user_id = data_json["id"].as_str()
-            .ok_or("Failed to get user id")?
-            .to_string();
-        let country_code = data_json["attributes"].take()["country"].as_str()
-            .ok_or("Failed to get country code")?
-            .to_string();
-
         // Get unofficial Tidal API session.
-        let (py_tidalapi_session, access_token) = Self::new_python_tidalapi_session()?;
+        let (py_tidalapi_session, access_token, country_code) = Self::new_python_tidalapi_session()?;
 
         Ok(Self {
             access_token,
             pkce_access_token: pkce_session.access_token,
             country_code,
-            user_id,
             request_client,
             py_tidalapi_session,
         })
@@ -204,11 +185,11 @@ impl Session {
         })
     }
 
-    /// Prints a login link for the user, and returns a Python tidalapi session object as well as the access token upon successful login.
-    fn new_python_tidalapi_session() -> Result<(PyObject, String), String> {
+    /// Prints a login link for the user, and returns a Python tidalapi session object as well as the access token and country code upon successful login.
+    fn new_python_tidalapi_session() -> Result<(PyObject, String, String), String> {
         pyo3::prepare_freethreaded_python();
 
-        let result = Python::with_gil(|py| -> PyResult<Option<(PyObject, String)>> {
+        let result = Python::with_gil(|py| -> PyResult<Option<(PyObject, String, String)>> {
             let tidalapi = PyModule::import(py, "tidalapi")?;
             let session = tidalapi.call_method0("Session")?;
 
@@ -223,38 +204,26 @@ impl Session {
             }
 
             let access_token: Option<String> = session.getattr("access_token")?.extract()?;
-            if access_token.is_none() {
+            let country_code: Option<String> = session.getattr("country_code")?.extract()?;
+            if access_token.is_none() || country_code.is_none() {
                 return Ok(None);
             }
 
             Ok(Some(
-                (session.unbind(), access_token.unwrap())
+                (session.unbind(), access_token.unwrap(), country_code.unwrap())
             ))
         });
 
         match result {
             Err(err) => Err(format!("A Python exception occurred:\n{}", err.to_string())),
             Ok(None) => Err(String::from("Login failure")),
-            Ok(Some(session)) => Ok(session),
-        }
-    }
-
-    /// Sets the audio quality setting used for playback.
-    pub fn set_audio_quality(&self, quality: AudioQuality) -> Result<(), String> {
-        let result = Python::with_gil(|py| -> PyResult<()> {
-            let audio_quality_str = quality.to_tidalapi_string();
-            self.py_tidalapi_session.setattr(py, "audio_quality", audio_quality_str)
-        });
-
-        match result {
-            Err(err) => Err(format!("A Python exception occurred:\n{}", err.to_string())),
-            _ => Ok(()),
+            Ok(Some(session_info)) => Ok(session_info),
         }
     }
 
     /// Makes a GET request to the Tidal API.
     /// 
-    /// Returns the JSON from key "data" in a successful response.
+    /// Returns the JSON from key "data" on a successful response.
     pub(super) fn get(&self, endpoint: &str) -> Result<JSONValue, String> {
         let url = format!("{}{}?countryCode={}", Self::BASE_URL, endpoint, self.country_code);
         let res = self.request_client.get(url)
@@ -273,8 +242,8 @@ impl Session {
 
     /// Makes a GET request to the Tidal API using the pkce session.
     /// 
-    /// Returns the JSON from key "data" in a successful response.
-    fn get_with_pkce(&self, endpoint: &str) -> Result<JSONValue, String> {
+    /// Returns the JSON from key "data" on a successful response.
+    pub(super) fn get_with_pkce(&self, endpoint: &str) -> Result<JSONValue, String> {
         let url = format!("{}{}?countryCode={}", Self::BASE_URL, endpoint, self.country_code);
         let res = self.request_client.get(url)
             .bearer_auth(&self.pkce_access_token)
@@ -288,5 +257,43 @@ impl Session {
         let mut json: JSONValue = res.json()
             .map_err(|e| format!("Unable to parse API response into JSON: {}", e.to_string()))?;
         Ok(json["data"].take())
+    }
+
+    /// Makes a GET request to the unofficial Tidal API.
+    /// 
+    /// Returns the JSON on a successful response.
+    pub(super) fn get_unofficial(&self, endpoint: &str) -> Result<JSONValue, String> {
+        let url = if endpoint.contains("?") {
+            format!("{}{}&countryCode={}", Self::UNOFFICIAL_BASE_URL, endpoint, self.country_code)
+        } else {
+            format!("{}{}?countryCode={}", Self::UNOFFICIAL_BASE_URL, endpoint, self.country_code)
+        };
+
+        let res = self.request_client.get(url)
+            .bearer_auth(&self.access_token)
+            .send()
+            .map_err(|e| format!("Unable to send (unofficial) GET request to {}: {}", endpoint, e.to_string()))?;
+
+        if !res.status().is_success() {
+            return Err(format!("(unofficial) GET request to {} failed with status code {}", endpoint, res.status()));
+        }
+
+        let json: JSONValue = res.json()
+            .map_err(|e| format!("Unable to parse (unofficial) API response into JSON: {}", e.to_string()))?;
+
+        Ok(json)
+    }
+
+    /// Sets the audio quality setting used for playback.
+    pub fn set_audio_quality(&self, quality: AudioQuality) -> Result<(), String> {
+        let result = Python::with_gil(|py| -> PyResult<()> {
+            let audio_quality_str = quality.to_tidalapi_string();
+            self.py_tidalapi_session.setattr(py, "audio_quality", audio_quality_str)
+        });
+
+        match result {
+            Err(err) => Err(format!("A Python exception occurred:\n{}", err.to_string())),
+            _ => Ok(()),
+        }
     }
 }
