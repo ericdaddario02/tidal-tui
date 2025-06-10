@@ -27,38 +27,43 @@ fn main() {
         println!("{err}");
         process::exit(1);
     });
-
-    println!("{user:#?}");
-
-    if let Err(err) = session.set_audio_quality(AudioQuality::High) {
-        println!("{err}");
-        process::exit(1);
-    }
-
-    let track = rtidalapi::Track::new(Arc::clone(&session), "5120043".to_string()).unwrap_or_else(|err| {
+    
+    let collection_tracks = user.get_collection_tracks().unwrap_or_else(|err| {
         println!("{err}");
         process::exit(1);
     });
 
-    println!("{track:#?}");
+    println!("{:#?}", collection_tracks[0]);
 
-    let track_url = track.get_url().unwrap_or_else(|err| {
-        println!("{err}");
-        process::exit(1);
-    });
+    // if let Err(err) = session.set_audio_quality(AudioQuality::High) {
+    //     println!("{err}");
+    //     process::exit(1);
+    // }
 
-    println!("{track_url}");
+    // let track = rtidalapi::Track::new(Arc::clone(&session), "5120043".to_string()).unwrap_or_else(|err| {
+    //     println!("{err}");
+    //     process::exit(1);
+    // });
 
-    let player = Arc::new(Mutex::new(Player::new().unwrap_or_else(|_err| {
-        println!("Failed to create Player.");
-        process::exit(1);
-    })));
+    // println!("{track:#?}");
 
-    Player::start_polling_thread(Arc::clone(&player)).unwrap();
+    // let track_url = track.get_url().unwrap_or_else(|err| {
+    //     println!("{err}");
+    //     process::exit(1);
+    // });
 
-    player.lock().unwrap().play_new_track(track).unwrap();
+    // println!("{track_url}");
 
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(1));
-    }
+    // let player = Arc::new(Mutex::new(Player::new().unwrap_or_else(|_err| {
+    //     println!("Failed to create Player.");
+    //     process::exit(1);
+    // })));
+
+    // Player::start_polling_thread(Arc::clone(&player)).unwrap();
+
+    // player.lock().unwrap().play_new_track(track).unwrap();
+
+    // loop {
+    //     std::thread::sleep(std::time::Duration::from_secs(1));
+    // }
 }

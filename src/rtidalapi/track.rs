@@ -18,9 +18,9 @@ use super::Session;
 pub struct Track {
     session: Arc<Session>,
     pub id: String,
-    pub attributes: TrackAttributes,
 
-    // The following fields are used to cache relationship API results.
+    // The following fields are used to cache API results.
+    attributes: OnceCell<TrackAttributes>,
     album: OnceCell<Album>,
     artist: OnceCell<Artist>,
 }
@@ -35,6 +35,7 @@ pub struct TrackAttributes {
     pub version: String,
     pub isrc: String,
     pub duration: String,
+    #[serde(default)]
     pub copyright: String,
     pub explicit: bool,
     pub popularity: f32,
@@ -45,19 +46,28 @@ pub struct TrackAttributes {
 impl Track {
     /// Returns a new `Track` from a track's id.
     pub fn new(session: Arc<Session>, id: String) -> Result<Self, String> {
-        let endpoint = format!("/tracks/{}", id);
-        let mut data_json = session.get(&endpoint)?;
-        let attributes_json = data_json["attributes"].take();
-
-        let attributes: TrackAttributes = serde_json::from_value(attributes_json)
-            .map_err(|e| format!("Unable to parse track API response: {}", e.to_string()))?;        
-
         Ok(Self {
             session,
             id,
-            attributes,
+            attributes: OnceCell::new(),
             album: OnceCell::new(),
             artist: OnceCell::new(),
+        })
+    }
+
+    /// Returns a reference to the `TrackAttributes` associated with this track.
+    /// 
+    /// This `TrackAttributes` is then cached within `self`.
+    pub fn get_attribtues(&self) -> Result<&TrackAttributes, String> {
+        self.attributes.get_or_try_init(|| -> Result<TrackAttributes, String> {
+            let endpoint = format!("/tracks/{}", self.id);
+            let mut data_json = self.session.get(&endpoint)?;
+            let attributes_json = data_json["attributes"].take();
+
+            let attributes: TrackAttributes = serde_json::from_value(attributes_json)
+                .map_err(|e| format!("Unable to parse track API response: {}", e.to_string()))?;
+
+            Ok(attributes)
         })
     }
 
@@ -107,11 +117,11 @@ impl Track {
         })
     }
 
-    /// Returns a `Duration` corresponding this `Album`'s duration attribute.
-    pub fn get_duration(&self) -> Duration {
+    /// Returns a `Duration` corresponding this `Track`'s duration attribute.
+    pub fn get_duration(&self) -> Result<Duration, String> {
         let re = Regex::new(r"^PT((?<hours>\d+)H)*((?<mins>\d+)M)*((?<secs>\d+)S)*$").unwrap();
-        let Some(captures) = re.captures(&self.attributes.duration) else {
-            return Duration::from_secs(0);
+        let Some(captures) = re.captures(&self.get_attribtues()?.duration) else {
+            return Ok(Duration::from_secs(0));
         };
 
         let hours: u64 = match captures.name("hours") {
@@ -127,7 +137,7 @@ impl Track {
             Some(secs_match) => secs_match.as_str().parse().unwrap_or(0),
         };
     
-        Duration::from_secs((hours * 60 * 60) + (mins * 60) + (secs))
+        Ok(Duration::from_secs((hours * 60 * 60) + (mins * 60) + (secs)))
     }
 
     /// Gets the url used for playback for this track.

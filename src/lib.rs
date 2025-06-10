@@ -131,12 +131,13 @@ impl Player {
     /// Replaces the current track with the given `Track` and starts playback.
     pub fn play_new_track(&mut self, track: Track) -> Result<(), Box<dyn Error>> {
         let track_url = track.get_url()?;
+        let track_attributes = track.get_attribtues()?;
         let album = track.get_album()?;
 
-        let track_title = &track.attributes.title;
+        let track_title = &track_attributes.title;
         let album_title = &album.attributes.title;
         let artist_name = &track.get_artist()?.attributes.name;
-        let duration = track.get_duration();
+        let duration = track.get_duration()?;
         let cover_url = &album.image_link;
 
         self.sink.clear();
