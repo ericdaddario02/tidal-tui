@@ -92,7 +92,8 @@ impl Player {
         {
             let mut locked_player = player.lock()
                 .map_err(|e| format!("{e:#?}"))?;
-            locked_player.controls.attach(move |event| { tx.send(event).unwrap(); })?;
+            locked_player.controls.attach(move |event| { tx.send(event).unwrap(); })
+                .map_err(|e| format!("{e:#?}"))?;
         }
 
         thread::spawn(move || {
@@ -164,8 +165,10 @@ impl Player {
             artist: Some(artist_name),
             duration: Some(duration),
             cover_url: Some(cover_url),
-        })?;
-        self.controls.set_playback(MediaPlayback::Playing { progress: None })?;
+        })
+            .map_err(|e| format!("{e:#?}"))?;
+        self.controls.set_playback(MediaPlayback::Playing { progress: None })
+            .map_err(|e| format!("{e:#?}"))?;
         self.is_playing = true;
 
         let future = async {
