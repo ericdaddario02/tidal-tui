@@ -7,6 +7,10 @@ use std::{
     time::Duration
 };
 
+use rand::{
+    seq::SliceRandom,
+    rng
+};
 use rodio::{
     Decoder,
     OutputStream,
@@ -126,6 +130,18 @@ impl Player {
         });
 
         Ok(())
+    }
+
+    /// Sets this player's queue and clears the currently playing track, if one exists.
+    pub fn set_queue(&mut self, tracks: Vec<Track>) {
+        self.current_track = None;
+        self.queue = tracks;
+        self.sink.clear();
+    }
+
+    /// Randomly shuffles this player's queue.
+    pub fn shuffle_queue(&mut self) {
+        self.queue.shuffle(&mut rng());
     }
 
     /// Replaces the current track with the given `Track` and starts playback.
