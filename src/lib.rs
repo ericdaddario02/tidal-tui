@@ -109,8 +109,14 @@ impl Player {
                     let mut locked_player = player.lock().unwrap();
                     if locked_player.is_playing {
                         let position = locked_player.sink.get_pos();
-                        locked_player.position = position;
-                        locked_player.controls.set_playback(MediaPlayback::Playing { progress: Some(MediaPosition(position)) }).unwrap();
+
+                        if position != Duration::from_secs(0) && position == locked_player.position {
+                            // Track is over.
+                            locked_player.next().unwrap();
+                        } else {
+                            locked_player.position = position;
+                            locked_player.controls.set_playback(MediaPlayback::Playing { progress: Some(MediaPosition(position)) }).unwrap();
+                        }
                     }
                 }
 
@@ -129,6 +135,9 @@ impl Player {
                         },
                         MediaControlEvent::Previous => {
                             locked_player.prev().unwrap();
+                        },
+                        MediaControlEvent::SetPosition(MediaPosition(position)) => {
+                            locked_player.set_position(position).unwrap();
                         },
                         _ => {},
                     }
@@ -179,7 +188,6 @@ impl Player {
             .map_err(|e| format!("{e:#?}"))?;
         self.controls.set_playback(MediaPlayback::Playing { progress: None })
             .map_err(|e| format!("{e:#?}"))?;
-        self.is_playing = true;
 
         let future = async {
             let reader = StreamDownload::new_http(
@@ -197,6 +205,7 @@ impl Player {
         self.tokio_rt.block_on(future)?;
 
         self.current_track = Some(track);
+        self.is_playing = true;
 
         Ok(())
     }
@@ -251,6 +260,15 @@ impl Player {
             self.play_new_track(next_track)?;
         } else {
             self.sink.clear();
+        }
+
+        Ok(())
+    }
+
+    /// Sets the position of playback in the player if there is a current track.
+    pub fn set_position(&mut self, position: Duration) -> Result<(), Box<dyn Error>> {
+        if self.current_track.is_some() {
+            self.sink.try_seek(position)?;
         }
 
         Ok(())
