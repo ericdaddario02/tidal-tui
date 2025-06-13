@@ -1,8 +1,13 @@
 pub mod rtidalapi;
 
 use std::{
+    collections::VecDeque,
     error::Error,
-    sync::{Arc, mpsc, Mutex},
+    sync::{
+        mpsc,
+        Arc,
+        Mutex
+    },
     thread,
     time::Duration
 };
@@ -47,7 +52,8 @@ pub struct Player {
     controls: MediaControls,
     tokio_rt: tokio::runtime::Runtime,
     current_track: Option<Track>,
-    queue: Vec<Track>,
+    queue: VecDeque<Track>,
+    queue_history: VecDeque<Track>,
     position: Duration,
     is_playing: bool,
 }
@@ -79,7 +85,8 @@ impl Player {
             tokio_rt,
             controls,
             current_track: None,
-            queue: vec![],
+            queue: VecDeque::new(),
+            queue_history: VecDeque::new(),
             position: Duration::from_secs(0),
             is_playing: false,
         })
@@ -106,21 +113,22 @@ impl Player {
                         locked_player.controls.set_playback(MediaPlayback::Playing { progress: Some(MediaPosition(position)) }).unwrap();
                     }
                 }
-                
+
                 if let Ok(event) = rx.try_recv() {
                     let mut locked_player = player.lock().unwrap();
-                    let position = locked_player.position;
 
                     match event {
                         MediaControlEvent::Pause => {
-                            locked_player.is_playing = false;
-                            locked_player.controls.set_playback(MediaPlayback::Paused { progress: Some(MediaPosition(position)) }).unwrap_or_else(|e| println!("Can't set paused: {e:?}"));
-                            locked_player.sink.pause();
+                            locked_player.pause().unwrap();
                         },
                         MediaControlEvent::Play => {
-                            locked_player.is_playing = true;
-                            locked_player.controls.set_playback(MediaPlayback::Playing { progress: Some(MediaPosition(position)) }).unwrap();
-                            locked_player.sink.play();
+                            locked_player.play().unwrap();
+                        },
+                        MediaControlEvent::Next => {
+                            locked_player.next().unwrap();
+                        },
+                        MediaControlEvent::Previous => {
+                            locked_player.prev().unwrap();
                         },
                         _ => {},
                     }
@@ -134,15 +142,17 @@ impl Player {
     }
 
     /// Sets this player's queue and clears the currently playing track, if one exists.
-    pub fn set_queue(&mut self, tracks: Vec<Track>) {
+    pub fn set_queue(&mut self, tracks: VecDeque<Track>) {
         self.current_track = None;
         self.queue = tracks;
+        self.queue_history.clear();
         self.sink.clear();
     }
 
-    /// Randomly shuffles this player's queue.
+    /// Randomly shuffles this player's queue and queue history into a new queue.
     pub fn shuffle_queue(&mut self) {
-        self.queue.shuffle(&mut rng());
+        self.queue.append(&mut self.queue_history);
+        self.queue.make_contiguous().shuffle(&mut rng());
     }
 
     /// Replaces the current track with the given `Track` and starts playback.
@@ -187,6 +197,61 @@ impl Player {
         self.tokio_rt.block_on(future)?;
 
         self.current_track = Some(track);
+
+        Ok(())
+    }
+
+    /// Resumes playback if a track is paused, or starts playing the first track in the queue (if non-empty).
+    pub fn play(&mut self) -> Result<(), Box<dyn Error>> {
+        if self.current_track.is_some() && !self.is_playing {
+            let position = self.position;
+            self.is_playing = true;
+            self.controls.set_playback(MediaPlayback::Playing { progress: Some(MediaPosition(position)) })?;
+            self.sink.play();
+        } else if self.current_track.is_none() && self.queue.len() > 0 {
+            let track = self.queue.pop_front().unwrap();
+            self.play_new_track(track)?;
+        }
+
+        Ok(())
+    }
+
+    /// Pauses playback is a track is playing.
+    pub fn pause(&mut self) -> Result<(), Box<dyn Error>> {
+        let position = self.position;
+        self.is_playing = false;
+        self.controls.set_playback(MediaPlayback::Paused { progress: Some(MediaPosition(position)) })?;
+        self.sink.pause();
+
+        Ok(())
+    }
+
+    /// Skips to playing the next track in the queue.
+    pub fn next(&mut self) -> Result<(), Box<dyn Error>> {
+        if let Some(current_track) = self.current_track.take() {
+            self.queue_history.push_back(current_track);
+        }
+
+        if let Some(next_track) = self.queue.pop_front() {
+            self.play_new_track(next_track)?;
+        } else {
+            self.sink.clear();
+        }
+
+        Ok(())
+    }
+
+    /// Goes back to play the previous track in the queue history.
+    pub fn prev(&mut self) -> Result<(), Box<dyn Error>> {
+        if let Some(current_track) = self.current_track.take() {
+            self.queue.push_front(current_track);
+        }
+
+        if let Some(next_track) = self.queue_history.pop_back() {
+            self.play_new_track(next_track)?;
+        } else {
+            self.sink.clear();
+        }
 
         Ok(())
     }

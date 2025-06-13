@@ -23,6 +23,7 @@ pub struct Track {
     attributes: OnceCell<TrackAttributes>,
     album: OnceCell<Album>,
     artist: OnceCell<Artist>,
+    url: OnceCell<String>,
 }
 
 /// A track's API attributes.
@@ -52,6 +53,7 @@ impl Track {
             attributes: OnceCell::new(),
             album: OnceCell::new(),
             artist: OnceCell::new(),
+            url: OnceCell::new(),
         })
     }
 
@@ -143,15 +145,17 @@ impl Track {
     /// Gets the url used for playback for this track.
     /// 
     /// Uses the unofficial Tidal API. 
-    pub fn get_url(&self) -> Result<String, String> {
-        let result = Python::with_gil(|py| -> PyResult<String> {
-            let track = self.session.py_tidalapi_session.call_method1(py, "track", (&self.id,))?;
-            track.call_method0(py, "get_url")?.extract(py)
-        });
+    pub fn get_url(&self) -> Result<&String, String> {
+        self.url.get_or_try_init(|| -> Result<String, String> {
+            let result = Python::with_gil(|py| -> PyResult<String> {
+                let track = self.session.py_tidalapi_session.call_method1(py, "track", (&self.id,))?;
+                track.call_method0(py, "get_url")?.extract(py)
+            });
 
-        match result {
-            Err(err) => Err(format!("A Python exception occurred:\n{}", err.to_string())),
-            Ok(track_url) => Ok(track_url),
-        }
+            match result {
+                Err(err) => Err(format!("A Python exception occurred:\n{}", err.to_string())),
+                Ok(track_url) => Ok(track_url),
+            }
+        })
     }
 }

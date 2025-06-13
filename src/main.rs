@@ -33,12 +33,10 @@ fn main() {
         process::exit(1);
     });
 
-    println!("{:#?}", collection_tracks[0]);
-
-    // if let Err(err) = session.set_audio_quality(AudioQuality::High) {
-    //     println!("{err}");
-    //     process::exit(1);
-    // }
+    if let Err(err) = session.set_audio_quality(AudioQuality::High) {
+        println!("{err}");
+        process::exit(1);
+    }
 
     // let track = rtidalapi::Track::new(Arc::clone(&session), "5120043".to_string()).unwrap_or_else(|err| {
     //     println!("{err}");
@@ -54,16 +52,19 @@ fn main() {
 
     // println!("{track_url}");
 
-    // let player = Arc::new(Mutex::new(Player::new().unwrap_or_else(|_err| {
-    //     println!("Failed to create Player.");
-    //     process::exit(1);
-    // })));
+    let player = Arc::new(Mutex::new(Player::new().unwrap_or_else(|_err| {
+        println!("Failed to create Player.");
+        process::exit(1);
+    })));
 
-    // Player::start_polling_thread(Arc::clone(&player)).unwrap();
+    player.lock().unwrap().set_queue(collection_tracks.into());
+    player.lock().unwrap().shuffle_queue();
 
-    // player.lock().unwrap().play_new_track(track).unwrap();
+    Player::start_polling_thread(Arc::clone(&player)).unwrap();
 
-    // loop {
-    //     std::thread::sleep(std::time::Duration::from_secs(1));
-    // }
+    player.lock().unwrap().play().unwrap();
+
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
 }
