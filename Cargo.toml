@@ -4,11 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+color-eyre = "0.6.5"
+crossterm = "0.29.0"
 dotenv = "0.15.0"
 oauth2 = { version = "5.0.0", features = ["reqwest-blocking"] }
 once_cell = "1.21.3"
 pyo3 = "0.25.0"
 rand = "0.9.1"
+ratatui = "0.29.0"
 regex = "1.11.1"
 reqwest = { version = "0.12.18", features = ["blocking", "json"] }
 rodio = { version = "0.20.1", default-features = false, features = ["symphonia-flac", "symphonia-aac", "symphonia-isomp4"] }
