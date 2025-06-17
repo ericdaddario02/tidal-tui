@@ -14,11 +14,13 @@ use crossterm::event::{
 use dotenv::dotenv;
 use ratatui::{
     buffer::Buffer,
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Rect},
     style::Stylize,
-    text::{Line, Text},
     widgets::{
-        Block, BorderType, Padding, Paragraph, Widget
+        Block,
+        BorderType,
+        Borders,
+        Widget,
     },
     DefaultTerminal,
     Frame,
@@ -101,22 +103,26 @@ impl App {
 
 impl Widget for &App {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let title = Line::from(" tidal-tui ".bold());
-        let keybinds = Line::from(vec![
-            " Quit ".into(),
-            "<Q> ".blue().bold(),
-        ]);
-        let block = Block::bordered()
-            .title(title.centered())
-            .title_bottom(keybinds.centered())
+        let main_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Fill(1),
+                Constraint::Length(8),
+            ])
+            .split(area);
+        let main_area = main_layout[0];
+        let now_playing_area = main_layout[1];
+
+        Block::new()
+            .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .padding(Padding::vertical(2));
+            .title(" My Collection ".bold())
+            .render(main_area, buf);
 
-        let counter_text = Text::from("Welcome");
-
-        Paragraph::new(counter_text)
-            .centered()
-            .block(block)
-            .render(area, buf);
+        Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(" Now Playing ".bold())
+            .render(now_playing_area, buf);
     }
 }
