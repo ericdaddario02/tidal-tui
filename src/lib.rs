@@ -1,7 +1,14 @@
 use std::{
     env,
     error::Error,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{
+            AtomicBool,
+            Ordering,
+        },
+        Arc,
+        Mutex,
+    },
     time::Duration,
 };
 
@@ -14,11 +21,9 @@ use crossterm::event::{
 };
 use dotenv::dotenv;
 use ratatui::{
-    buffer::Buffer,
     layout::{Constraint,
         Direction,
         Layout,
-        Rect,
     },
     style::Stylize,
     widgets::{
@@ -26,7 +31,6 @@ use ratatui::{
         BorderType,
         Borders,
         Paragraph,
-        Widget,
     },
     DefaultTerminal,
     Frame,
@@ -39,7 +43,6 @@ pub mod rtidalapi;
 use rtidalapi::{
     AudioQuality,
     Session,
-    Track,
     User,
 };
 use player::Player;
@@ -53,10 +56,10 @@ pub struct App {
     exit: bool,
     player: Arc<Mutex<Player>>,
     session: Arc<Session>,
-    user: Arc<Mutex<User>>,
+    user: Arc<User>,
     rx: mpsc::UnboundedReceiver<AppEvent>,
     tx: mpsc::UnboundedSender<AppEvent>,
-    collection_tracks_fetched: Arc<Mutex<bool>>,
+    collection_tracks_fetched: Arc<AtomicBool>,
 }
 
 impl App {
@@ -80,10 +83,10 @@ impl App {
             exit: false,
             player,
             session,
-            user: Arc::new(Mutex::new(user)),
+            user: Arc::new(user),
             tx,
             rx,
-            collection_tracks_fetched: Arc::new(Mutex::new(false)),
+            collection_tracks_fetched: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -139,7 +142,7 @@ impl App {
             .split(main_area);
 
         {
-            if *self.collection_tracks_fetched.lock().unwrap() {
+            if self.collection_tracks_fetched.load(Ordering::Relaxed) {
                 f.render_widget(Paragraph::new("Tracks loaded"), inner_main_area[0]);
             } else {
                 f.render_widget(Paragraph::new("Loading..."), inner_main_area[0]);
@@ -147,9 +150,10 @@ impl App {
                 let tx_clone = self.tx.clone();
                 let collection_tracks_fetched_clone = Arc::clone(&self.collection_tracks_fetched);
                 let user_clone = Arc::clone(&self.user);
+
                 tokio::task::spawn_blocking(move || {
-                    user_clone.lock().unwrap().get_collection_tracks().unwrap();
-                    *collection_tracks_fetched_clone.lock().unwrap() = true;
+                    user_clone.get_collection_tracks().unwrap();
+                    collection_tracks_fetched_clone.store(true, Ordering::Relaxed);
                     tx_clone.send(AppEvent::ReRender).unwrap();
                 });
             }
