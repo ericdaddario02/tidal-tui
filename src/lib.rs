@@ -15,12 +15,17 @@ use crossterm::event::{
 use dotenv::dotenv;
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint,
+        Direction,
+        Layout,
+        Rect,
+    },
     style::Stylize,
     widgets::{
         Block,
         BorderType,
         Borders,
+        Paragraph,
         Widget,
     },
     DefaultTerminal,
@@ -34,6 +39,7 @@ pub mod rtidalapi;
 use rtidalapi::{
     AudioQuality,
     Session,
+    Track,
     User,
 };
 use player::Player;
@@ -47,9 +53,10 @@ pub struct App {
     exit: bool,
     player: Arc<Mutex<Player>>,
     session: Arc<Session>,
-    user: User,
+    user: Arc<Mutex<User>>,
     rx: mpsc::UnboundedReceiver<AppEvent>,
     tx: mpsc::UnboundedSender<AppEvent>,
+    collection_tracks_fetched: Arc<Mutex<bool>>,
 }
 
 impl App {
@@ -73,9 +80,10 @@ impl App {
             exit: false,
             player,
             session,
-            user,
+            user: Arc::new(Mutex::new(user)),
             tx,
             rx,
+            collection_tracks_fetched: Arc::new(Mutex::new(false)),
         })
     }
 
@@ -103,7 +111,7 @@ impl App {
     }
 
     /// Draws a frame.
-    fn draw(&self, f: &mut Frame) {
+    fn draw(&mut self, f: &mut Frame) {
         let main_layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -114,12 +122,40 @@ impl App {
         let main_area = main_layout[0];
         let now_playing_area = main_layout[1];
 
+        // My Collection
         let my_collection_block = Block::new()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title(" My Collection ".bold());
+            .title(" My Collection - Tracks ".bold());
         f.render_widget(my_collection_block, main_area);
+        
+        let inner_main_area = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Fill(1),
+            ])
+            .vertical_margin(2)
+            .horizontal_margin(4)
+            .split(main_area);
 
+        {
+            if *self.collection_tracks_fetched.lock().unwrap() {
+                f.render_widget(Paragraph::new("Tracks loaded"), inner_main_area[0]);
+            } else {
+                f.render_widget(Paragraph::new("Loading..."), inner_main_area[0]);
+
+                let tx_clone = self.tx.clone();
+                let collection_tracks_fetched_clone = Arc::clone(&self.collection_tracks_fetched);
+                let user_clone = Arc::clone(&self.user);
+                tokio::task::spawn_blocking(move || {
+                    user_clone.lock().unwrap().get_collection_tracks().unwrap();
+                    *collection_tracks_fetched_clone.lock().unwrap() = true;
+                    tx_clone.send(AppEvent::ReRender).unwrap();
+                });
+            }
+        }
+
+        // Now Playing
         let now_playing_block = Block::new()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)

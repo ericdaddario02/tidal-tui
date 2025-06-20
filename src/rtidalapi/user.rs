@@ -2,6 +2,7 @@ use std::{
     sync::Arc,
 };
 
+use once_cell::sync::OnceCell;
 use serde::{Deserialize};
 
 use super::{
@@ -15,6 +16,9 @@ pub struct User {
     session: Arc<Session>,
     pub id: String,
     pub attributes: UserAttributes,
+
+    // The following fields are used to cache API results.
+    collection_tracks: OnceCell<Vec<Track>>,
 }
 
 /// An user's API attributes.
@@ -46,33 +50,36 @@ impl User {
             session,
             id,
             attributes,
+            collection_tracks: OnceCell::new(),
         })
     }
 
     /// Returns a list of tracks in the user's collection.
-    pub fn get_collection_tracks(&self) -> Result<Vec<Track>, String> {
-        let endpoint = format!("/users/{}/favorites/tracks?limit=10000", self.id);
-        let res_json = self.session.get_unofficial(&endpoint)?;
+    pub fn get_collection_tracks(&self) -> Result<&Vec<Track>, String> {
+        self.collection_tracks.get_or_try_init(|| -> Result<Vec<Track>, String> {
+            let endpoint = format!("/users/{}/favorites/tracks?limit=10000", self.id);
+            let res_json = self.session.get_unofficial(&endpoint)?;
 
-        let size = res_json["totalNumberOfItems"]
-            .as_u64()
-            .ok_or(String::from("Unable to get collection tracks"))?;
-
-        let mut collection_tracks: Vec<Track> = Vec::with_capacity(size as usize);
-
-        let items_array = res_json["items"]
-            .as_array()
-            .ok_or(String::from("Unable to get collection tracks"))?;
-
-        for json in items_array {
-            let track_id = json["item"]["id"]
+            let size = res_json["totalNumberOfItems"]
                 .as_u64()
-                .ok_or(String::from("Unable to get collection tracks"))?
-                .to_string();
-            let track = Track::new(Arc::clone(&self.session), track_id)?;
-            collection_tracks.push(track);
-        }
+                .ok_or(String::from("Unable to get collection tracks"))?;
 
-        Ok(collection_tracks)
+            let mut collection_tracks: Vec<Track> = Vec::with_capacity(size as usize);
+
+            let items_array = res_json["items"]
+                .as_array()
+                .ok_or(String::from("Unable to get collection tracks"))?;
+
+            for json in items_array {
+                let track_id = json["item"]["id"]
+                    .as_u64()
+                    .ok_or(String::from("Unable to get collection tracks"))?
+                    .to_string();
+                let track = Track::new(Arc::clone(&self.session), track_id)?;
+                collection_tracks.push(track);
+            }
+
+            Ok(collection_tracks)
+        })
     }
 }
