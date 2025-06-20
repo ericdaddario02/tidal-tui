@@ -25,12 +25,18 @@ use ratatui::{
         Direction,
         Layout,
     },
-    style::Stylize,
+    style::{
+        Style,
+        Stylize,
+    },
     widgets::{
         Block,
         BorderType,
         Borders,
         Paragraph,
+        Row,
+        Table,
+        TableState,
     },
     DefaultTerminal,
     Frame,
@@ -60,6 +66,7 @@ pub struct App {
     rx: mpsc::UnboundedReceiver<AppEvent>,
     tx: mpsc::UnboundedSender<AppEvent>,
     collection_tracks_fetched: Arc<AtomicBool>,
+    collection_tracks_table_state: TableState,
 }
 
 impl App {
@@ -79,6 +86,8 @@ impl App {
 
         let (tx, rx) = mpsc::unbounded_channel::<AppEvent>();
 
+        let collection_tracks_table_state = TableState::default();
+
         Ok(Self {
             exit: false,
             player,
@@ -87,6 +96,7 @@ impl App {
             tx,
             rx,
             collection_tracks_fetched: Arc::new(AtomicBool::new(false)),
+            collection_tracks_table_state,
         })
     }
 
@@ -137,26 +147,41 @@ impl App {
             .constraints([
                 Constraint::Fill(1),
             ])
-            .vertical_margin(2)
-            .horizontal_margin(4)
+            .vertical_margin(1)
+            .horizontal_margin(2)
             .split(main_area);
 
-        {
-            if self.collection_tracks_fetched.load(Ordering::Relaxed) {
-                f.render_widget(Paragraph::new("Tracks loaded"), inner_main_area[0]);
-            } else {
-                f.render_widget(Paragraph::new("Loading..."), inner_main_area[0]);
+        if self.collection_tracks_fetched.load(Ordering::Relaxed) {
+            let collection_tracks_rows: Vec<Row> = self.user.get_collection_tracks().unwrap()
+                .iter()
+                .enumerate()
+                .map(|(idx, track)| {
+                    Row::new([idx.to_string(), "".to_string(), "".to_string(), "".to_string(), "".to_string()])
+                })
+                .collect();
 
-                let tx_clone = self.tx.clone();
-                let collection_tracks_fetched_clone = Arc::clone(&self.collection_tracks_fetched);
-                let user_clone = Arc::clone(&self.user);
+            let collection_tracks_table = Table::default()
+                .header(
+                    Row::new(["#", "Title", "Artist", "Album", "Time"])
+                        .bottom_margin(1)
+                )
+                .widths([Constraint::Max(6), Constraint::Min(10), Constraint::Min(10), Constraint::Min(10), Constraint::Max(9)])
+                .rows(collection_tracks_rows)
+                .row_highlight_style(Style::new().cyan().bold());
 
-                tokio::task::spawn_blocking(move || {
-                    user_clone.get_collection_tracks().unwrap();
-                    collection_tracks_fetched_clone.store(true, Ordering::Relaxed);
-                    tx_clone.send(AppEvent::ReRender).unwrap();
-                });
-            }
+            f.render_stateful_widget(collection_tracks_table, inner_main_area[0], &mut self.collection_tracks_table_state);
+        } else {
+            f.render_widget(Paragraph::new("Loading..."), inner_main_area[0]);
+
+            let tx_clone = self.tx.clone();
+            let collection_tracks_fetched_clone = Arc::clone(&self.collection_tracks_fetched);
+            let user_clone = Arc::clone(&self.user);
+
+            tokio::task::spawn_blocking(move || {
+                user_clone.get_collection_tracks().unwrap();
+                collection_tracks_fetched_clone.store(true, Ordering::Relaxed);
+                tx_clone.send(AppEvent::ReRender).unwrap();
+            });
         }
 
         // Now Playing
@@ -173,6 +198,10 @@ impl App {
             Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                 match key_event.code {
                     KeyCode::Char('q') => self.exit(),
+                    KeyCode::Up => self.prev_row(),
+                    KeyCode::Down => self.next_row(),
+                    KeyCode::Char('t') => self.go_to_top(),
+                    KeyCode::Char('b') => self.go_to_bottom(),
                     _ => {},
                 }
             }
@@ -184,5 +213,25 @@ impl App {
     /// Exit this application's main loop.
     fn exit(&mut self) {
         self.exit = true;
+    }
+
+    /// Selects the next row in the table.
+    fn next_row(&mut self) {
+        self.collection_tracks_table_state.select_next();
+    }
+
+    /// Selects the previous row in the table.
+    fn prev_row(&mut self) {
+        self.collection_tracks_table_state.select_previous();
+    }
+
+    /// Selects the first row in the table.
+    fn go_to_top(&mut self) {
+        self.collection_tracks_table_state.select_first();
+    }
+
+    /// Selects the last row in the table.
+    fn go_to_bottom(&mut self) {
+        self.collection_tracks_table_state.select_last();
     }
 }
