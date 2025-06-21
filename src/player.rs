@@ -171,8 +171,8 @@ impl Player {
         let track_title = &track_attributes.title;
         let album_title = &album.attributes.title;
         let artist_name = &track.get_artist()?.attributes.name;
-        let duration = track.get_duration()?;
-        let cover_url = &album.image_link;
+        let duration = track.get_duration()?.clone();
+        let cover_url = &album.cover_art_url;
 
         self.sink.clear();
 

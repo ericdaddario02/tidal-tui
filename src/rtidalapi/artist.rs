@@ -7,7 +7,7 @@ use serde::{Deserialize};
 use super::Session;
 
 /// A Tidal artist.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Artist {
     session: Arc<Session>,
     pub id: String,
@@ -16,7 +16,7 @@ pub struct Artist {
 
 /// An artist's API attributes.
 #[allow(dead_code)]
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ArtistAttributes {
     pub name: String,
@@ -27,7 +27,7 @@ impl Artist {
     /// Returns a new `Artist` from an artist's id.
     pub fn new(session: Arc<Session>, id: String) -> Result<Self, String> {
         let endpoint = format!("/artists/{}", id);
-        let mut data_json = session.get(&endpoint)?;
+        let mut data_json = session.get(&endpoint)?["data"].take();
         let attributes_json = data_json["attributes"].take();
 
         let attributes: ArtistAttributes = serde_json::from_value(attributes_json)

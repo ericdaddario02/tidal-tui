@@ -36,7 +36,7 @@ impl User {
     /// Gets the currently logged in user from a session.
     pub fn get_current_user(session: Arc<Session>) -> Result<Self, String> {
         let endpoint = "/users/me";
-        let mut data_json = session.get(&endpoint)?;
+        let mut data_json = session.get(&endpoint)?["data"].take();
 
         let id = data_json["id"].as_str()
             .ok_or(String::from("Unable to get current user"))?

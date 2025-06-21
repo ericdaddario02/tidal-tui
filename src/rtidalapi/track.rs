@@ -14,10 +14,13 @@ use super::Artist;
 use super::Session;
 
 /// A Tidal track.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Track {
     session: Arc<Session>,
     pub id: String,
+
+    // Cache the duration regex result.
+    duration: OnceCell<Duration>,
 
     // The following fields are used to cache API results.
     attributes: OnceCell<TrackAttributes>,
@@ -28,7 +31,7 @@ pub struct Track {
 
 /// A track's API attributes.
 #[allow(dead_code)]
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackAttributes {
     pub title: String,
@@ -50,6 +53,7 @@ impl Track {
         Ok(Self {
             session,
             id,
+            duration: OnceCell::new(),
             attributes: OnceCell::new(),
             album: OnceCell::new(),
             artist: OnceCell::new(),
@@ -63,7 +67,7 @@ impl Track {
     pub fn get_attribtues(&self) -> Result<&TrackAttributes, String> {
         self.attributes.get_or_try_init(|| -> Result<TrackAttributes, String> {
             let endpoint = format!("/tracks/{}", self.id);
-            let mut data_json = self.session.get(&endpoint)?;
+            let mut data_json = self.session.get(&endpoint)?["data"].take();
             let attributes_json = data_json["attributes"].take();
 
             let attributes: TrackAttributes = serde_json::from_value(attributes_json)
@@ -79,7 +83,7 @@ impl Track {
     pub fn get_album(&self) -> Result<&Album, String> {
         self.album.get_or_try_init(|| -> Result<Album, String> {
             let album_relationships_endpoint = format!("/tracks/{}/relationships/albums", self.id);
-            let data_json = self.session.get(&album_relationships_endpoint)?;
+            let data_json = self.session.get(&album_relationships_endpoint)?["data"].take();
             let albums = data_json.as_array()
                 .ok_or(String::from("Unable to parse album relationship API response"))?;
 
@@ -102,7 +106,7 @@ impl Track {
     pub fn get_artist(&self) -> Result<&Artist, String> {
         self.artist.get_or_try_init(|| -> Result<Artist, String> {
             let artist_relationships_endpoint = format!("/tracks/{}/relationships/artists", self.id);
-            let data_json = self.session.get(&artist_relationships_endpoint)?;
+            let data_json = self.session.get(&artist_relationships_endpoint)?["data"].take();
             let artists = data_json.as_array()
                 .ok_or(String::from("Unable to parse artist relationship API response"))?;
 
@@ -119,27 +123,35 @@ impl Track {
         })
     }
 
-    /// Returns a `Duration` corresponding this `Track`'s duration attribute.
-    pub fn get_duration(&self) -> Result<Duration, String> {
-        let re = Regex::new(r"^PT((?<hours>\d+)H)*((?<mins>\d+)M)*((?<secs>\d+)S)*$").unwrap();
-        let Some(captures) = re.captures(&self.get_attribtues()?.duration) else {
-            return Ok(Duration::from_secs(0));
-        };
+    /// Returns true if this Track already contains its attributes, album, and artist information.
+    pub fn has_info(&self) -> bool {
+        self.attributes.get().is_some() && self.album.get().is_some() && self.artist.get().is_some()
+    }
 
-        let hours: u64 = match captures.name("hours") {
-            None => 0,
-            Some(hours_match) => hours_match.as_str().parse().unwrap_or(0),
-        };
-        let mins: u64 = match captures.name("mins") {
-            None => 0,
-            Some(mins_match) => mins_match.as_str().parse().unwrap_or(0),
-        };
-        let secs: u64 = match captures.name("secs") {
-            None => 0,
-            Some(secs_match) => secs_match.as_str().parse().unwrap_or(0),
-        };
-    
-        Ok(Duration::from_secs((hours * 60 * 60) + (mins * 60) + (secs)))
+    /// Returns a `Duration` corresponding this `Track`'s duration attribute.
+    pub fn get_duration(&self) -> Result<&Duration, String> {
+        self.duration.get_or_try_init(|| -> Result<Duration, String> {
+            let re = Regex::new(r"^PT((?<hours>\d+)H)*((?<mins>\d+)M)*((?<secs>\d+)S)*$")
+                .map_err(|e| format!("{}", e.to_string()))?;
+            let Some(captures) = re.captures(&self.get_attribtues()?.duration) else {
+                return Ok(Duration::from_secs(0));
+            };
+
+            let hours: u64 = match captures.name("hours") {
+                None => 0,
+                Some(hours_match) => hours_match.as_str().parse().unwrap_or(0),
+            };
+            let mins: u64 = match captures.name("mins") {
+                None => 0,
+                Some(mins_match) => mins_match.as_str().parse().unwrap_or(0),
+            };
+            let secs: u64 = match captures.name("secs") {
+                None => 0,
+                Some(secs_match) => secs_match.as_str().parse().unwrap_or(0),
+            };
+        
+            Ok(Duration::from_secs((hours * 60 * 60) + (mins * 60) + (secs)))
+        })
     }
 
     /// Gets the url used for playback for this track.

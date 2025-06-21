@@ -222,10 +222,12 @@ impl Session {
     }
 
     /// Makes a GET request to the Tidal API.
-    /// 
-    /// Returns the JSON from key "data" on a successful response.
     pub(super) fn get(&self, endpoint: &str) -> Result<JSONValue, String> {
-        let url = format!("{}{}?countryCode={}", Self::BASE_URL, endpoint, self.country_code);
+        let url = if endpoint.contains("?") {
+            format!("{}{}&countryCode={}", Self::BASE_URL, endpoint, self.country_code)
+        } else {
+            format!("{}{}?countryCode={}", Self::BASE_URL, endpoint, self.country_code)
+        };
         let res = self.request_client.get(url)
             .bearer_auth(&self.access_token)
             .send()
@@ -237,14 +239,16 @@ impl Session {
 
         let mut json: JSONValue = res.json()
             .map_err(|e| format!("Unable to parse API response into JSON: {}", e.to_string()))?;
-        Ok(json["data"].take())
+        Ok(json)
     }
 
     /// Makes a GET request to the Tidal API using the pkce session.
-    /// 
-    /// Returns the JSON from key "data" on a successful response.
     pub(super) fn get_with_pkce(&self, endpoint: &str) -> Result<JSONValue, String> {
-        let url = format!("{}{}?countryCode={}", Self::BASE_URL, endpoint, self.country_code);
+        let url = if endpoint.contains("?") {
+            format!("{}{}&countryCode={}", Self::BASE_URL, endpoint, self.country_code)
+        } else {
+            format!("{}{}?countryCode={}", Self::BASE_URL, endpoint, self.country_code)
+        };
         let res = self.request_client.get(url)
             .bearer_auth(&self.pkce_access_token)
             .send()
@@ -256,12 +260,10 @@ impl Session {
 
         let mut json: JSONValue = res.json()
             .map_err(|e| format!("Unable to parse API response into JSON: {}", e.to_string()))?;
-        Ok(json["data"].take())
+        Ok(json)
     }
 
     /// Makes a GET request to the unofficial Tidal API.
-    /// 
-    /// Returns the JSON on a successful response.
     pub(super) fn get_unofficial(&self, endpoint: &str) -> Result<JSONValue, String> {
         let url = if endpoint.contains("?") {
             format!("{}{}&countryCode={}", Self::UNOFFICIAL_BASE_URL, endpoint, self.country_code)
