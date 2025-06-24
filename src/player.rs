@@ -244,13 +244,15 @@ impl Player {
     /// Skips to playing the next track in the queue.
     pub fn next(&mut self) -> Result<(), Box<dyn Error>> {
         if let Some(current_track) = self.current_track.take() {
-            self.queue_history.push_back(current_track);
-        }
-
-        if let Some(next_track) = self.queue.pop_front() {
-            self.play_new_track(next_track)?;
-        } else {
-            self.sink.clear();
+            if let Some(next_track) = self.queue.pop_front() {
+                self.queue_history.push_back(current_track);
+                self.play_new_track(next_track)?;
+            } else {
+                // No next tracks. Just start the same track over again (same as Tidal).
+                self.current_track = Some(current_track);
+                self.set_position(Duration::from_secs(0))?;
+                self.controls.set_playback(MediaPlayback::Paused { progress: Some(MediaPosition(Duration::from_secs(0))) })?;
+            }
         }
 
         Ok(())
@@ -259,13 +261,15 @@ impl Player {
     /// Goes back to play the previous track in the queue history.
     pub fn prev(&mut self) -> Result<(), Box<dyn Error>> {
         if let Some(current_track) = self.current_track.take() {
-            self.queue.push_front(current_track);
-        }
-
-        if let Some(next_track) = self.queue_history.pop_back() {
-            self.play_new_track(next_track)?;
-        } else {
-            self.sink.clear();
+            if let Some(prev_track) = self.queue_history.pop_back() {
+                self.queue.push_front(current_track);
+                self.play_new_track(prev_track)?;
+            } else {
+                // No previous tracks. Just start the same track over again (same as Tidal).
+                self.current_track = Some(current_track);
+                self.set_position(Duration::from_secs(0))?;
+                self.controls.set_playback(MediaPlayback::Paused { progress: Some(MediaPosition(Duration::from_secs(0))) })?;
+            }
         }
 
         Ok(())
@@ -275,6 +279,7 @@ impl Player {
     pub fn set_position(&mut self, position: Duration) -> Result<(), Box<dyn Error>> {
         if self.current_track.is_some() {
             self.sink.try_seek(position)?;
+            self.position = position;
         }
 
         Ok(())
