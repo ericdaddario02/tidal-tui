@@ -12,7 +12,10 @@ use std::{
     time::Duration,
 };
 
-use color_eyre::Result;
+use color_eyre::{
+    eyre::eyre,
+    Result,
+};
 use crossterm::event::{
     self,
     Event,
@@ -30,6 +33,7 @@ use ratatui::{
         Style,
         Stylize,
     },
+    text::Line,
     widgets::{
         Block,
         BorderType,
@@ -143,7 +147,8 @@ impl App {
         let my_collection_block = Block::new()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title(" My Collection - Tracks ".bold());
+            .title(" My Collection - Tracks ".bold())
+            .title_bottom(Line::from(" <P>: Play  <S>: Shuffle ").right_aligned());
         f.render_widget(my_collection_block, main_area);
         
         let inner_main_area = Layout::default()
@@ -185,7 +190,7 @@ impl App {
                             let artist = track.get_artist().unwrap().attributes.name.clone();
                             let album = track.get_album().unwrap().attributes.title.clone();
                             let duration = track.get_duration().unwrap();
-                            let time = format!("{}:{}", duration.as_secs() / 60, duration.as_secs() % 60);
+                            let time = format!("{}:{:02}", duration.as_secs() / 60, duration.as_secs() % 60);
 
                             Row::new([number, title, artist, album, time])
                         } else {
@@ -251,6 +256,8 @@ impl App {
                     KeyCode::Down => self.next_row(),
                     KeyCode::Char('t') => self.go_to_top(),
                     KeyCode::Char('b') => self.go_to_bottom(),
+                    KeyCode::Char('P') => self.play_all().map_err(|e| eyre!(format!("{e}")))?,
+                    KeyCode::Char('S') => self.shuffle_all().map_err(|e| eyre!(format!("{e}")))?,
                     _ => {},
                 }
             }
@@ -282,5 +289,40 @@ impl App {
     /// Selects the last row in the table.
     fn go_to_bottom(&mut self) {
         self.collection_tracks_table_state.select_last();
+    }
+
+    /// Starts playing the collection's tracks from the beginning.
+    fn play_all(&mut self) -> Result<(), Box<dyn Error>> {
+        let collection_tracks_copy = self.user.get_collection_tracks()?.clone();
+
+        let mut locked_player = self.player.lock()
+            .map_err(|e| format!("{e:#?}"))?;
+        locked_player.set_queue(collection_tracks_copy.into());
+        drop(locked_player);
+
+        let player_clone = Arc::clone(&self.player);
+        tokio::task::spawn_blocking(move || {
+            player_clone.lock().unwrap().play().unwrap();
+        });
+
+        Ok(())
+    }
+
+    /// Starts playing the collection's tracks in a shuffled order.
+    fn shuffle_all(&mut self) -> Result<(), Box<dyn Error>> {
+        let collection_tracks_copy = self.user.get_collection_tracks()?.clone();
+
+        let mut locked_player = self.player.lock()
+            .map_err(|e| format!("{e:#?}"))?;
+        locked_player.set_queue(collection_tracks_copy.into());
+        locked_player.shuffle_queue();
+        drop(locked_player);
+
+        let player_clone = Arc::clone(&self.player);
+        tokio::task::spawn_blocking(move || {
+            player_clone.lock().unwrap().play().unwrap();
+        });
+
+        Ok(())
     }
 }
