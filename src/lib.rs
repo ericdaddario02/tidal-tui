@@ -34,11 +34,15 @@ use ratatui::{
         Style,
         Stylize,
     },
-    text::Line,
+    text::{
+        Line, 
+        Span,
+    },
     widgets::{
         Block,
         BorderType,
         Borders,
+        Gauge,
         Paragraph,
         Row,
         Table,
@@ -53,7 +57,6 @@ pub mod player;
 pub mod rtidalapi;
 
 use rtidalapi::{
-    AudioQuality,
     Session,
     Track,
     User,
@@ -75,6 +78,7 @@ pub struct App {
     collection_tracks: Arc<Mutex<Vec<Arc<Track>>>>,
     collection_tracks_fetched: Arc<AtomicBool>,
     collection_tracks_table_state: TableState,
+    is_shuffle: bool,
 }
 
 impl App {
@@ -85,7 +89,6 @@ impl App {
         let session = Arc::new(
             Session::new(&env::var("TIDAL_CLIENT_ID")?, &env::var("TIDAL_CLIENT_SECRET")?).unwrap()
         );
-        session.set_audio_quality(AudioQuality::High)?;
 
         let user = rtidalapi::User::get_current_user(Arc::clone(&session))?;
 
@@ -106,6 +109,7 @@ impl App {
             collection_tracks: Arc::new(Mutex::new(vec![])),
             collection_tracks_fetched: Arc::new(AtomicBool::new(false)),
             collection_tracks_table_state,
+            is_shuffle: false,
         })
     }
 
@@ -138,7 +142,7 @@ impl App {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Fill(1),
-                Constraint::Length(8),
+                Constraint::Length(7),
             ])
             .split(f.area());
         let main_area = main_layout[0];
@@ -185,8 +189,8 @@ impl App {
                             let title = track.get_attribtues().unwrap().title.clone();
                             let artist = track.get_artist().unwrap().attributes.name.clone();
                             let album = track.get_album().unwrap().attributes.title.clone();
-                            let duration = track.get_duration().unwrap();
-                            let time = format!("{}:{:02}", duration.as_secs() / 60, duration.as_secs() % 60);
+                            let duration = track.get_duration().unwrap().clone();
+                            let time = format_duration(duration);
 
                             Row::new([number, title, artist, album, time])
                         } else {
@@ -250,6 +254,104 @@ impl App {
             .border_style(Color::Cyan)
             .title(" Now Playing ".bold());
         f.render_widget(now_playing_block, area);
+
+        let sections = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Fill(2),
+                Constraint::Fill(3),
+                Constraint::Fill(2),
+            ])
+            .vertical_margin(2)
+            .horizontal_margin(2)
+            .split(area);
+
+        let left_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .split(sections[0]);
+
+        let middle_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .split(sections[1]);
+        let progress_layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(5),
+                Constraint::Fill(1),
+                Constraint::Length(5),
+            ])
+            .spacing(1)
+            .split(middle_layout[2]);
+
+        let right_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .split(sections[2]);
+
+        let unlocked_player = self.player.lock().unwrap(); 
+
+        if let Some(current_track) = unlocked_player.get_current_track() {
+            if current_track.has_info() {
+                let track_title = current_track.get_attribtues().unwrap().title.clone();
+                let artist_title = current_track.get_artist().unwrap().attributes.name.clone();
+                let album_title = current_track.get_album().unwrap().attributes.title.clone();
+
+                f.render_widget(Line::from(track_title.bold()), left_layout[0]);
+                f.render_widget(Line::from(format!("{} - {}", artist_title, album_title)), left_layout[1]);
+                f.render_widget(Line::from("Playing From: Tracks".dark_gray()), left_layout[2]);
+
+                let shuffle_str = if self.is_shuffle { "Shuffle: On    " } else { "Shuffle: Off    " };
+                let playing_status_str = if unlocked_player.is_playing() { "||" } else { "> " };
+                
+                f.render_widget(
+                    Line::default().spans(
+                        vec![
+                            shuffle_str.dark_gray(),
+                            playing_status_str.into(),
+                            "    Repeat: Off".dark_gray(),
+                        ]
+                    ).centered(),
+                    middle_layout[0]);
+
+                let position = unlocked_player.get_position();
+                let track_duration = current_track.get_duration().unwrap().clone();
+                let position_progress = position.as_secs_f64() / track_duration.as_secs_f64();
+                
+                let progress_bar_label = Span::styled("", Color::LightCyan);
+                let progress_bar = Gauge::default()
+                    .gauge_style(Color::Cyan)
+                    .on_dark_gray()
+                    .ratio(position_progress)
+                    .label(progress_bar_label);
+                f.render_widget(Line::from(format_duration(position)).right_aligned(), progress_layout[0]);
+                f.render_widget(progress_bar, progress_layout[1]);
+                f.render_widget(Line::from(format_duration(track_duration)).left_aligned(), progress_layout[2]);
+
+                let volume = unlocked_player.get_volume();
+                let quality = self.session.get_audio_quality();
+
+                f.render_widget(Line::from(format!("Volume: {}%", volume)).right_aligned(), right_layout[1]);
+                f.render_widget(Line::from(format!("Quality: {}", quality.to_string())).right_aligned(), right_layout[2]);
+            } else {
+                f.render_widget(Line::from("Nothing playing").dark_gray(), left_layout[0]);
+            }
+        } else {
+            f.render_widget(Line::from("Nothing playing").dark_gray(), left_layout[0]);
+        }
     }
 
     /// Handles user input events and updates application state accordingly.
@@ -311,6 +413,8 @@ impl App {
             player_clone.lock().unwrap().play().unwrap();
         });
 
+        self.is_shuffle = false;
+
         Ok(())
     }
 
@@ -329,6 +433,13 @@ impl App {
             player_clone.lock().unwrap().play().unwrap();
         });
 
+        self.is_shuffle = true;
+
         Ok(())
     }
+}
+
+/// Formats a `Duration` into a `String` for displaying.
+fn format_duration(duration: Duration) -> String {
+    format!("{}:{:02}", duration.as_secs() / 60, duration.as_secs() % 60)
 }

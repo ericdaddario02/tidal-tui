@@ -54,6 +54,7 @@ pub struct Player {
     queue_history: VecDeque<Track>,
     position: Duration,
     is_playing: bool,
+    volume: u32,
 }
 
 impl Player {
@@ -87,6 +88,7 @@ impl Player {
             queue_history: VecDeque::new(),
             position: Duration::from_secs(0),
             is_playing: false,
+            volume: 50,
         })
     }
 
@@ -146,6 +148,38 @@ impl Player {
         });
 
         Ok(())
+    }
+
+    /// Returns a reference to the current track if one exists.
+    pub fn get_current_track(&self) -> Option<&Track> {
+        self.current_track.as_ref()
+    }
+
+    /// Returns the position of the current track.
+    pub fn get_position(&self) -> Duration {
+        self.position
+    }
+
+    /// Returns true iff this player is currently playing.
+    pub fn is_playing(&self) -> bool {
+        self.is_playing
+    }
+
+    /// Sets this player's volume satiatingly between 0 and 100.
+    pub fn set_volume(&mut self, volume: u32) {
+        if volume > 100 {
+            self.volume = 100;
+        } else {
+            self.volume = volume;
+        }
+
+        let volume_ratio = (volume / 100) as f32;
+        self.sink.set_volume(Self::MAX_VOLUME * volume_ratio);
+    }
+
+    /// Returns this player's volume.
+    pub fn get_volume(&self) -> u32 {
+        self.volume
     }
 
     /// Sets this player's queue and clears the currently playing track, if one exists.
