@@ -30,6 +30,7 @@ use ratatui::{
         Rect,
     },
     style::{
+        Color,
         Style,
         Stylize,
     },
@@ -147,6 +148,7 @@ impl App {
         let my_collection_block = Block::new()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
+            .border_style(Color::Cyan)
             .title(" My Collection - Tracks ".bold())
             .title_bottom(Line::from(" <P>: Play  <S>: Shuffle ").right_aligned());
         f.render_widget(my_collection_block, main_area);
@@ -166,6 +168,7 @@ impl App {
         let now_playing_block = Block::new()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
+            .border_style(Color::Cyan)
             .title(" Now Playing ".bold());
         f.render_widget(now_playing_block, now_playing_area);
     }
