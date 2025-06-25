@@ -144,37 +144,30 @@ impl App {
         let main_area = main_layout[0];
         let now_playing_area = main_layout[1];
 
-        // My Collection
+        self.draw_my_collections_tracks(f, main_area);
+        self.draw_now_playing(f, now_playing_area);
+    }
+
+    /// Draws the My Collections - Tracks table.
+    fn draw_my_collections_tracks(&mut self, f: &mut Frame, area: Rect) {
         let my_collection_block = Block::new()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Color::Cyan)
             .title(" My Collection - Tracks ".bold())
             .title_bottom(Line::from(" <P>: Play  <S>: Shuffle ").right_aligned());
-        f.render_widget(my_collection_block, main_area);
+        f.render_widget(my_collection_block, area);
         
-        let inner_main_area = Layout::default()
+        let inner_area = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Fill(1),
             ])
             .vertical_margin(1)
             .horizontal_margin(2)
-            .split(main_area);
+            .split(area)
+            [0];
 
-        self.draw_my_collections_tracks(f, inner_main_area[0]);
-
-        // Now Playing
-        let now_playing_block = Block::new()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Color::Cyan)
-            .title(" Now Playing ".bold());
-        f.render_widget(now_playing_block, now_playing_area);
-    }
-
-    /// Draws the My Collections - Tracks table.
-    fn draw_my_collections_tracks(&mut self, f: &mut Frame, area: Rect) {
         if self.collection_tracks_fetched.load(Ordering::Relaxed) {
             let unlocked_collection_tracks = self.collection_tracks.lock().unwrap();
             let collection_tracks_rows: Vec<Row> = unlocked_collection_tracks
@@ -182,7 +175,7 @@ impl App {
                 .enumerate()
                 .map(|(idx, track)| {
                     let current_position = self.collection_tracks_table_state.selected().unwrap_or(0);
-                    let num_rows = area.height as usize;
+                    let num_rows = inner_area.height as usize;
                     let render_window_amount = num_rows + 10;
 
                     // Only render certain number of rows.
@@ -226,9 +219,9 @@ impl App {
                 .rows(collection_tracks_rows)
                 .row_highlight_style(Style::new().cyan().bold());
 
-            f.render_stateful_widget(collection_tracks_table, area, &mut self.collection_tracks_table_state);
+            f.render_stateful_widget(collection_tracks_table, inner_area, &mut self.collection_tracks_table_state);
         } else {
-            f.render_widget(Paragraph::new("Loading..."), area);
+            f.render_widget(Paragraph::new("Loading..."), inner_area);
 
             let tx_clone = self.tx.clone();
             let collection_tracks_clone = Arc::clone(&self.collection_tracks);
@@ -247,6 +240,16 @@ impl App {
                 tx_clone.send(AppEvent::ReRender).unwrap();
             });
         }
+    }
+
+    /// Draws the now playing block.
+    fn draw_now_playing(&mut self, f: &mut Frame, area: Rect) {
+        let now_playing_block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Color::Cyan)
+            .title(" Now Playing ".bold());
+        f.render_widget(now_playing_block, area);
     }
 
     /// Handles user input events and updates application state accordingly.
