@@ -63,7 +63,7 @@ use rtidalapi::{
 };
 use player::Player;
 
-enum AppEvent {
+pub enum AppEvent {
     ReRender,
 }
 
@@ -73,8 +73,8 @@ pub struct App {
     player: Arc<Mutex<Player>>,
     session: Arc<Session>,
     user: Arc<User>,
-    rx: mpsc::UnboundedReceiver<AppEvent>,
-    tx: mpsc::UnboundedSender<AppEvent>,
+    rx: mpsc::Receiver<AppEvent>,
+    tx: mpsc::Sender<AppEvent>,
     collection_tracks: Arc<Mutex<Vec<Arc<Track>>>>,
     collection_tracks_fetched: Arc<AtomicBool>,
     collection_tracks_table_state: TableState,
@@ -92,10 +92,14 @@ impl App {
 
         let user = rtidalapi::User::get_current_user(Arc::clone(&session))?;
 
-        let player = Arc::new(Mutex::new(Player::new()?));
-        Player::start_polling_thread(Arc::clone(&player))?;
+        // Set the AppEvent buffer to 2 to ignore multiple stored rerender events.
+        const MAX_APP_EVENTS: usize = 2;
 
-        let (tx, rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (tx, rx) = mpsc::channel::<AppEvent>(MAX_APP_EVENTS);
+        let tx_clone = tx.clone();
+
+        let player = Arc::new(Mutex::new(Player::new()?));
+        Player::start_polling_thread(Arc::clone(&player), tx_clone)?;
 
         let collection_tracks_table_state = TableState::default();
 
@@ -201,7 +205,7 @@ impl App {
                                 track_clone.get_attribtues().unwrap();
                                 track_clone.get_artist().unwrap();
                                 track_clone.get_album().unwrap();
-                                tx_clone.send(AppEvent::ReRender).unwrap();
+                                let _ = tx_clone.try_send(AppEvent::ReRender);
                             });
 
                             Row::new(["".to_string(), "".to_string(), "".to_string(), "".to_string(), "".to_string()])
@@ -241,7 +245,7 @@ impl App {
                         .collect();  
                 }
                 collection_tracks_fetched_clone.store(true, Ordering::Relaxed);
-                tx_clone.send(AppEvent::ReRender).unwrap();
+                let _ = tx_clone.try_send(AppEvent::ReRender);
             });
         }
     }

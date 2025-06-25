@@ -20,7 +20,6 @@ use rodio::{
     OutputStreamHandle,
     Sink
 };
-use crate::rtidalapi::Track;
 use souvlaki::{
     MediaControlEvent,
     MediaControls,
@@ -33,7 +32,11 @@ use stream_download::{
     Settings,
     StreamDownload
 };
-use tokio;
+
+use crate::{
+    rtidalapi::Track,
+    AppEvent,
+};
 
 /// Wrapper for rodio OutputStream so Player can be Send+Sync.
 struct PlayerOutputStreamWrapper {
@@ -93,7 +96,7 @@ impl Player {
     }
 
     /// Spawns another thread to poll for playback position updates and media control events.
-    pub fn start_polling_thread(player: Arc<Mutex<Self>>) -> Result<(), Box<dyn Error>> {
+    pub fn start_polling_thread(player: Arc<Mutex<Self>>, app_tx: tokio::sync::mpsc::Sender<AppEvent>) -> Result<(), Box<dyn Error>> {
         let (tx, rx) = mpsc::channel();
 
         {
@@ -113,9 +116,13 @@ impl Player {
                         if position != Duration::from_secs(0) && position == locked_player.position {
                             // Track is over.
                             locked_player.next().unwrap();
+                            let _ = app_tx.try_send(AppEvent::ReRender);
                         } else {
+                            if position.as_secs() != locked_player.position.as_secs() {
+                                let _ = app_tx.try_send(AppEvent::ReRender);
+                                locked_player.controls.set_playback(MediaPlayback::Playing { progress: Some(MediaPosition(position)) }).unwrap();
+                            }
                             locked_player.position = position;
-                            locked_player.controls.set_playback(MediaPlayback::Playing { progress: Some(MediaPosition(position)) }).unwrap();
                         }
                     }
                 }
@@ -141,6 +148,8 @@ impl Player {
                         },
                         _ => {},
                     }
+
+                    let _ = app_tx.try_send(AppEvent::ReRender);
                 }
 
                 thread::sleep(Duration::from_millis(100));
