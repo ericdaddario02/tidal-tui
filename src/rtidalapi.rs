@@ -1,4 +1,5 @@
 /// Audio quality options in Tidal.
+#[derive(Clone, Copy, Debug)]
 pub enum AudioQuality {
     /// 96 kbps
     Low96,
@@ -20,6 +21,17 @@ impl AudioQuality {
             Self::High => String::from("LOSSLESS"),
             // Max quality not currently supported.
             // Self::Max => String::from("HI_RES_LOSSLES"),
+        }
+    }
+
+    /// Returns a string representation of this quality setting similar to how it is written in Tidal.
+    pub fn to_string(&self) -> String {
+        match self {
+            Self::Low96 => String::from("Low (96 kbps)"),
+            Self::Low320 => String::from("Low (320 kbps)"),
+            Self::High => String::from("High"),
+            // Max quality not currently supported.
+            // Self::Max => String::from("Max"),
         }
     }
 }
