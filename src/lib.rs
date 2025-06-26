@@ -445,5 +445,5 @@ impl App {
 
 /// Formats a `Duration` into a `String` for displaying.
 fn format_duration(duration: Duration) -> String {
-    format!("{}:{:02}", duration.as_secs() / 60, duration.as_secs() % 60)
+    format!("{}:{:02}", (duration.as_secs_f64().round() as u64) / 60, (duration.as_secs_f64().round() as u64) % 60)
 }

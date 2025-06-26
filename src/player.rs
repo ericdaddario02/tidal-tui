@@ -118,7 +118,7 @@ impl Player {
                             locked_player.next().unwrap();
                             let _ = app_tx.try_send(AppEvent::ReRender);
                         } else {
-                            if position.as_secs() != locked_player.position.as_secs() {
+                            if position.as_secs_f64().round() != locked_player.position.as_secs_f64().round() {
                                 let _ = app_tx.try_send(AppEvent::ReRender);
                                 locked_player.controls.set_playback(MediaPlayback::Playing { progress: Some(MediaPosition(position)) }).unwrap();
                             }
