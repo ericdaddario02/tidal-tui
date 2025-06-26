@@ -275,6 +275,7 @@ impl App {
             ])
             .vertical_margin(2)
             .horizontal_margin(2)
+            .spacing(1)
             .split(area);
 
         let left_layout = Layout::default()
@@ -315,8 +316,8 @@ impl App {
 
         let unlocked_player = self.player.lock().unwrap(); 
 
-        if let Some(current_track) = unlocked_player.get_current_track() {
-            if current_track.has_info() {
+        match unlocked_player.get_current_track() {
+            Some(current_track) if current_track.has_info() => {
                 let track_title = current_track.get_attribtues().unwrap().title.clone();
                 let artist_title = current_track.get_artist().unwrap().attributes.name.clone();
                 let album_title = current_track.get_album().unwrap().attributes.title.clone();
@@ -324,19 +325,6 @@ impl App {
                 f.render_widget(Line::from(track_title.bold()), left_layout[0]);
                 f.render_widget(Line::from(format!("{} - {}", artist_title, album_title)), left_layout[1]);
                 f.render_widget(Line::from("Playing From: Tracks".dark_gray()), left_layout[2]);
-
-                let shuffle_str = if self.is_shuffle { "Shuffle: On    " } else { "Shuffle: Off    " };
-                let playing_status_str = if unlocked_player.is_playing() { "||" } else { "> " };
-                
-                f.render_widget(
-                    Line::default().spans(
-                        vec![
-                            shuffle_str.dark_gray(),
-                            playing_status_str.into(),
-                            "    Repeat: Off".dark_gray(),
-                        ]
-                    ).centered(),
-                    middle_layout[0]);
 
                 let position = unlocked_player.get_position();
                 let track_duration = current_track.get_duration().unwrap().clone();
@@ -351,18 +339,40 @@ impl App {
                 f.render_widget(Line::from(format_duration(position)).right_aligned(), progress_layout[0]);
                 f.render_widget(progress_bar, progress_layout[1]);
                 f.render_widget(Line::from(format_duration(track_duration)).left_aligned(), progress_layout[2]);
-
-                let volume = unlocked_player.get_volume();
-                let quality = self.session.get_audio_quality();
-
-                f.render_widget(Line::from(format!("Volume: {}%", volume)).right_aligned(), right_layout[1]);
-                f.render_widget(Line::from(format!("Quality: {}", quality.to_string())).right_aligned(), right_layout[2]);
-            } else {
+            },
+            _ => {
                 f.render_widget(Line::from("Nothing playing").dark_gray(), left_layout[0]);
-            }
-        } else {
-            f.render_widget(Line::from("Nothing playing").dark_gray(), left_layout[0]);
+
+                let progress_bar_label = Span::styled("", Color::LightCyan);
+                let progress_bar = Gauge::default()
+                    .gauge_style(Color::Cyan)
+                    .on_dark_gray()
+                    .ratio(0.0)
+                    .label(progress_bar_label);
+                f.render_widget(Line::from("0:00").right_aligned(), progress_layout[0]);
+                f.render_widget(progress_bar, progress_layout[1]);
+                f.render_widget(Line::from("0:00").left_aligned(), progress_layout[2]);
+            },
         }
+
+        let shuffle_str = if self.is_shuffle { "Shuffle: On    " } else { "Shuffle: Off    " };
+        let playing_status_str = if unlocked_player.is_playing() { "||" } else { "> " };
+        
+        f.render_widget(
+            Line::default().spans(
+                vec![
+                    shuffle_str.dark_gray(),
+                    playing_status_str.into(),
+                    "    Repeat: Off".dark_gray(),
+                ]
+            ).centered(),
+            middle_layout[0]);
+
+        let volume = unlocked_player.get_volume();
+        let quality = self.session.get_audio_quality();
+
+        f.render_widget(Line::from(format!("Volume: {}%", volume)).right_aligned(), right_layout[1]);
+        f.render_widget(Line::from(format!("Quality: {}", quality.to_string())).right_aligned(), right_layout[2]);
     }
 
     /// Handles user input events and updates application state accordingly.
