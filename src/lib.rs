@@ -4,6 +4,7 @@ use std::{
     sync::{
         atomic::{
             AtomicBool,
+            AtomicUsize,
             Ordering,
         },
         Arc,
@@ -76,6 +77,7 @@ pub struct App {
     rx: mpsc::Receiver<AppEvent>,
     tx: mpsc::Sender<AppEvent>,
     collection_tracks: Arc<Mutex<Vec<Arc<Track>>>>,
+    collection_tracks_len: Arc<AtomicUsize>,
     collection_tracks_fetched: Arc<AtomicBool>,
     collection_tracks_table_state: TableState,
     is_shuffle: bool,
@@ -111,6 +113,7 @@ impl App {
             tx,
             rx,
             collection_tracks: Arc::new(Mutex::new(vec![])),
+            collection_tracks_len: Arc::new(AtomicUsize::new(0)),
             collection_tracks_fetched: Arc::new(AtomicBool::new(false)),
             collection_tracks_table_state,
             is_shuffle: false,
@@ -233,17 +236,21 @@ impl App {
 
             let tx_clone = self.tx.clone();
             let collection_tracks_clone = Arc::clone(&self.collection_tracks);
+            let collection_tracks_len_clone = Arc::clone(&self.collection_tracks_len);
             let collection_tracks_fetched_clone = Arc::clone(&self.collection_tracks_fetched);
             let user_clone = Arc::clone(&self.user);
 
             tokio::task::spawn_blocking(move || {
                 let collection_tracks = user_clone.get_collection_tracks().unwrap().to_vec();
+                collection_tracks_len_clone.store(collection_tracks.len(), Ordering::Relaxed);
+
                 {
                     *collection_tracks_clone.lock().unwrap() = collection_tracks
                         .into_iter()
                         .map(|t| Arc::new(t))
                         .collect();  
                 }
+
                 collection_tracks_fetched_clone.store(true, Ordering::Relaxed);
                 let _ = tx_clone.try_send(AppEvent::ReRender);
             });
@@ -402,7 +409,7 @@ impl App {
 
     /// Selects the last row in the table.
     fn go_to_bottom(&mut self) {
-        self.collection_tracks_table_state.select_last();
+        self.collection_tracks_table_state.select(Some(self.collection_tracks_len.load(Ordering::Relaxed)));
     }
 
     /// Starts playing the collection's tracks from the beginning.
