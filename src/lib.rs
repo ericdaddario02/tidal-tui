@@ -363,13 +363,15 @@ impl App {
         match event {
             Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                 match key_event.code {
-                    KeyCode::Char('q') => self.exit(),
+                    KeyCode::Char('Q') => self.exit(),
                     KeyCode::Up => self.prev_row(),
                     KeyCode::Down => self.next_row(),
                     KeyCode::Char('t') => self.go_to_top(),
                     KeyCode::Char('b') => self.go_to_bottom(),
                     KeyCode::Char('P') => self.play_all().map_err(|e| eyre!(format!("{e}")))?,
                     KeyCode::Char('S') => self.shuffle_all().map_err(|e| eyre!(format!("{e}")))?,
+                    KeyCode::Char('-') => self.volume_down().map_err(|e| eyre!(format!("{e}")))?,
+                    KeyCode::Char('=') => self.volume_up().map_err(|e| eyre!(format!("{e}")))?,
                     _ => {},
                 }
             }
@@ -407,10 +409,10 @@ impl App {
     fn play_all(&mut self) -> Result<(), Box<dyn Error>> {
         let collection_tracks_copy = self.user.get_collection_tracks()?.clone();
 
-        let mut locked_player = self.player.lock()
+        let mut unlocked_player = self.player.lock()
             .map_err(|e| format!("{e:#?}"))?;
-        locked_player.set_queue(collection_tracks_copy.into());
-        drop(locked_player);
+        unlocked_player.set_queue(collection_tracks_copy.into());
+        drop(unlocked_player);
 
         let player_clone = Arc::clone(&self.player);
         tokio::task::spawn_blocking(move || {
@@ -426,11 +428,11 @@ impl App {
     fn shuffle_all(&mut self) -> Result<(), Box<dyn Error>> {
         let collection_tracks_copy = self.user.get_collection_tracks()?.clone();
 
-        let mut locked_player = self.player.lock()
+        let mut unlocked_player = self.player.lock()
             .map_err(|e| format!("{e:#?}"))?;
-        locked_player.set_queue(collection_tracks_copy.into());
-        locked_player.shuffle_queue();
-        drop(locked_player);
+        unlocked_player.set_queue(collection_tracks_copy.into());
+        unlocked_player.shuffle_queue();
+        drop(unlocked_player);
 
         let player_clone = Arc::clone(&self.player);
         tokio::task::spawn_blocking(move || {
@@ -438,6 +440,32 @@ impl App {
         });
 
         self.is_shuffle = true;
+
+        Ok(())
+    }
+
+    /// Decreases the volume of the player.
+    fn volume_down(&mut self) -> Result<(), Box<dyn Error>> {
+        const DECREASE_AMOUNT: u32 = 5;
+
+        let mut unlocked_player = self.player.lock()
+            .map_err(|e| format!("{e:#?}"))?;
+
+        let current_volume = unlocked_player.get_volume();
+        unlocked_player.set_volume(current_volume.saturating_sub(DECREASE_AMOUNT));
+
+        Ok(())
+    }
+
+    /// Increase the volume of the player.
+    fn volume_up(&mut self) -> Result<(), Box<dyn Error>> {
+        const INCREASE_AMOUNT: u32 = 5;
+
+        let mut unlocked_player = self.player.lock()
+            .map_err(|e| format!("{e:#?}"))?;
+
+        let current_volume = unlocked_player.get_volume();
+        unlocked_player.set_volume(current_volume.saturating_add(INCREASE_AMOUNT));
 
         Ok(())
     }

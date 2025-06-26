@@ -100,51 +100,51 @@ impl Player {
         let (tx, rx) = mpsc::channel();
 
         {
-            let mut locked_player = player.lock()
+            let mut unlocked_player = player.lock()
                 .map_err(|e| format!("{e:#?}"))?;
-            locked_player.controls.attach(move |event| { tx.send(event).unwrap(); })
+            unlocked_player.controls.attach(move |event| { tx.send(event).unwrap(); })
                 .map_err(|e| format!("{e:#?}"))?;
         }
 
         thread::spawn(move || {
             loop {
                 {
-                    let mut locked_player = player.lock().unwrap();
-                    if locked_player.is_playing {
-                        let position = locked_player.sink.get_pos();
+                    let mut unlocked_player = player.lock().unwrap();
+                    if unlocked_player.is_playing {
+                        let position = unlocked_player.sink.get_pos();
 
-                        if position != Duration::from_secs(0) && position == locked_player.position {
+                        if position != Duration::from_secs(0) && position == unlocked_player.position {
                             // Track is over.
-                            locked_player.next().unwrap();
+                            unlocked_player.next().unwrap();
                             let _ = app_tx.try_send(AppEvent::ReRender);
                         } else {
-                            if position.as_secs_f64().round() != locked_player.position.as_secs_f64().round() {
+                            if position.as_secs_f64().round() != unlocked_player.position.as_secs_f64().round() {
                                 let _ = app_tx.try_send(AppEvent::ReRender);
-                                locked_player.controls.set_playback(MediaPlayback::Playing { progress: Some(MediaPosition(position)) }).unwrap();
+                                unlocked_player.controls.set_playback(MediaPlayback::Playing { progress: Some(MediaPosition(position)) }).unwrap();
                             }
-                            locked_player.position = position;
+                            unlocked_player.position = position;
                         }
                     }
                 }
 
                 if let Ok(event) = rx.try_recv() {
-                    let mut locked_player = player.lock().unwrap();
+                    let mut unlocked_player = player.lock().unwrap();
 
                     match event {
                         MediaControlEvent::Pause => {
-                            locked_player.pause().unwrap();
+                            unlocked_player.pause().unwrap();
                         },
                         MediaControlEvent::Play => {
-                            locked_player.play().unwrap();
+                            unlocked_player.play().unwrap();
                         },
                         MediaControlEvent::Next => {
-                            locked_player.next().unwrap();
+                            unlocked_player.next().unwrap();
                         },
                         MediaControlEvent::Previous => {
-                            locked_player.prev().unwrap();
+                            unlocked_player.prev().unwrap();
                         },
                         MediaControlEvent::SetPosition(MediaPosition(position)) => {
-                            locked_player.set_position(position).unwrap();
+                            unlocked_player.set_position(position).unwrap();
                         },
                         _ => {},
                     }
@@ -182,7 +182,7 @@ impl Player {
             self.volume = volume;
         }
 
-        let volume_ratio = (volume / 100) as f32;
+        let volume_ratio = (volume as f32) / 100.0;
         self.sink.set_volume(Self::MAX_VOLUME * volume_ratio);
     }
 
