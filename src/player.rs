@@ -247,6 +247,7 @@ impl Player {
 
         self.current_track = Some(track);
         self.is_playing = true;
+        self.position = Duration::from_secs(0);
 
         // Prefetch the next track's info to reduce delay between tracks.
         if let Some(next_track) = self.queue.get(0) {

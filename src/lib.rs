@@ -333,7 +333,7 @@ impl App {
 
                 let position = unlocked_player.get_position();
                 let track_duration = current_track.get_duration().unwrap().clone();
-                let position_progress = position.as_secs_f64() / track_duration.as_secs_f64();
+                let position_progress = (position.as_secs() as f64) / (track_duration.as_secs() as f64);
                 
                 let progress_bar_label = Span::styled("", Color::LightCyan);
                 let progress_bar = Gauge::default()
