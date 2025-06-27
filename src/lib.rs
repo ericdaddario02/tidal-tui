@@ -387,6 +387,7 @@ impl App {
                     KeyCode::Down => self.next_row(),
                     KeyCode::Char('t') => self.go_to_top(),
                     KeyCode::Char('b') => self.go_to_bottom(),
+                    KeyCode::Char('c') => self.go_to_currently_playing().map_err(|e| eyre!(format!("{e}")))?,
                     KeyCode::Char('P') => self.play_all().map_err(|e| eyre!(format!("{e}")))?,
                     KeyCode::Char('S') => self.shuffle_all().map_err(|e| eyre!(format!("{e}")))?,
 
@@ -427,6 +428,23 @@ impl App {
     /// Selects the last row in the table.
     fn go_to_bottom(&mut self) {
         self.collection_tracks_table_state.select(Some(self.collection_tracks_len.load(Ordering::Relaxed)));
+    }
+
+    /// Selects the currently playing track's row in the table.
+    fn go_to_currently_playing(&mut self) -> Result<(), Box<dyn Error>> {
+        let unlocked_player = self.player.lock()
+            .map_err(|e| format!("{e:#?}"))?;
+
+        if let Some(current_track) = unlocked_player.get_current_track() {
+            let unlocked_collections_tracks = self.collection_tracks.lock()
+                .map_err(|e| format!("{e:#?}"))?;
+
+            if let Some(index) = unlocked_collections_tracks.iter().position(|t| t.id == current_track.id) {
+                self.collection_tracks_table_state.select(Some(index));
+            }
+        }
+
+        Ok(())
     }
 
     /// Starts playing the collection's tracks from the beginning.
