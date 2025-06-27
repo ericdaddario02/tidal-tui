@@ -381,14 +381,21 @@ impl App {
             Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
                 match key_event.code {
                     KeyCode::Char('Q') => self.exit(),
+
+                    // My Collection - Tracks keybinds
                     KeyCode::Up => self.prev_row(),
                     KeyCode::Down => self.next_row(),
                     KeyCode::Char('t') => self.go_to_top(),
                     KeyCode::Char('b') => self.go_to_bottom(),
                     KeyCode::Char('P') => self.play_all().map_err(|e| eyre!(format!("{e}")))?,
                     KeyCode::Char('S') => self.shuffle_all().map_err(|e| eyre!(format!("{e}")))?,
+
+                    // Player keybinds
                     KeyCode::Char('-') => self.volume_down().map_err(|e| eyre!(format!("{e}")))?,
                     KeyCode::Char('=') => self.volume_up().map_err(|e| eyre!(format!("{e}")))?,
+                    KeyCode::Char(' ') => self.toggle_play_pause().map_err(|e| eyre!(format!("{e}")))?,
+                    KeyCode::Char('[') => self.previous_track().map_err(|e| eyre!(format!("{e}")))?,
+                    KeyCode::Char(']') => self.next_track().map_err(|e| eyre!(format!("{e}")))?,
                     _ => {},
                 }
             }
@@ -483,6 +490,40 @@ impl App {
 
         let current_volume = unlocked_player.get_volume();
         unlocked_player.set_volume(current_volume.saturating_add(INCREASE_AMOUNT));
+
+        Ok(())
+    }
+
+    /// Toggles Play/Pause for the player.
+    fn toggle_play_pause(&mut self) -> Result<(), Box<dyn Error>> {
+        let mut unlocked_player = self.player.lock()
+            .map_err(|e| format!("{e:#?}"))?;
+
+        if unlocked_player.is_playing() {
+            unlocked_player.pause()?;
+        } else {
+            unlocked_player.play()?;
+        }
+
+        Ok(())
+    }
+
+    /// Goes back to play the previous track.
+    fn previous_track(&mut self) -> Result<(), Box<dyn Error>> {
+        let player_clone = Arc::clone(&self.player);
+        tokio::task::spawn_blocking(move || {
+            player_clone.lock().unwrap().prev().unwrap();
+        });
+
+        Ok(())
+    }
+
+    /// Skips to play the next track.
+    fn next_track(&mut self) -> Result<(), Box<dyn Error>> {
+        let player_clone = Arc::clone(&self.player);
+        tokio::task::spawn_blocking(move || {
+            player_clone.lock().unwrap().next().unwrap();
+        });
 
         Ok(())
     }
