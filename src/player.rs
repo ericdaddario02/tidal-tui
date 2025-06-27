@@ -77,8 +77,7 @@ impl Player {
             display_name: "tidal-tui",
             hwnd: None,
         };
-        let controls = souvlaki::MediaControls::new(config)
-            .map_err(|e| format!("{e:#?}"))?;
+        let controls = souvlaki::MediaControls::new(config)?;
 
         Ok(Self {
             _stream: PlayerOutputStreamWrapper { _stream },
@@ -102,8 +101,7 @@ impl Player {
         {
             let mut unlocked_player = player.lock()
                 .map_err(|e| format!("{e:#?}"))?;
-            unlocked_player.controls.attach(move |event| { tx.send(event).unwrap(); })
-                .map_err(|e| format!("{e:#?}"))?;
+            unlocked_player.controls.attach(move |event| { tx.send(event).unwrap(); })?;
         }
 
         thread::spawn(move || {
@@ -225,10 +223,8 @@ impl Player {
             artist: Some(artist_name),
             duration: Some(duration),
             cover_url: Some(cover_url),
-        })
-            .map_err(|e| format!("{e:#?}"))?;
-        self.controls.set_playback(MediaPlayback::Playing { progress: None })
-            .map_err(|e| format!("{e:#?}"))?;
+        })?;
+        self.controls.set_playback(MediaPlayback::Playing { progress: None })?;
 
         let future = async {
             let reader = StreamDownload::new_http(
