@@ -66,7 +66,7 @@ impl Player {
 
     /// Returns a new `Player`.
     pub fn new() -> Result<Self, Box<dyn Error>> {
-        let tokio_rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+        let tokio_rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build()?;
 
         let (_stream, _stream_handle) = OutputStream::try_default()?;
         let sink = Sink::try_new(&_stream_handle)?;
