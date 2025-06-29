@@ -1,5 +1,8 @@
 use std::{
-    sync::Arc,
+    sync::{
+        Arc,
+        Mutex,
+    },
     time::Duration
 };
 
@@ -11,6 +14,7 @@ use serde_json;
 
 use super::Album;
 use super::Artist;
+use super::AudioQuality;
 use super::Session;
 
 /// A Tidal track.
@@ -26,7 +30,8 @@ pub struct Track {
     attributes: OnceCell<TrackAttributes>,
     album: OnceCell<Album>,
     artist: OnceCell<Artist>,
-    url: OnceCell<String>,
+    url: Arc<Mutex<Option<String>>>,
+    url_audio_quality: Arc<Mutex<Option<AudioQuality>>>,
 }
 
 /// A track's API attributes.
@@ -57,7 +62,8 @@ impl Track {
             attributes: OnceCell::new(),
             album: OnceCell::new(),
             artist: OnceCell::new(),
-            url: OnceCell::new(),
+            url: Arc::new(Mutex::new(None)),
+            url_audio_quality: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -157,17 +163,27 @@ impl Track {
     /// Gets the url used for playback for this track.
     /// 
     /// Uses the unofficial Tidal API. 
-    pub fn get_url(&self) -> Result<&String, String> {
-        self.url.get_or_try_init(|| -> Result<String, String> {
+    pub fn get_url(&self) -> Result<String, String> {
+        let mut unlocked_url = self.url.lock().map_err(|e| format!("{e:#?}"))?;
+        let mut unlocked_url_audio_quality = self.url_audio_quality.lock().map_err(|e| format!("{e:#?}"))?;
+
+        if unlocked_url.is_none() || unlocked_url_audio_quality.is_some_and(|quality| quality != self.session.get_audio_quality()) {
             let result = Python::with_gil(|py| -> PyResult<String> {
                 let track = self.session.py_tidalapi_session.call_method1(py, "track", (&self.id,))?;
                 track.call_method0(py, "get_url")?.extract(py)
             });
 
             match result {
-                Err(err) => Err(format!("A Python exception occurred:\n{}", err.to_string())),
-                Ok(track_url) => Ok(track_url),
+                Err(err) => {
+                    return Err(format!("A Python exception occurred:\n{}", err.to_string()));
+                },
+                Ok(track_url) => {
+                    *unlocked_url = Some(track_url);
+                    *unlocked_url_audio_quality = Some(self.session.get_audio_quality());
+                },
             }
-        })
+        }
+
+        Ok(unlocked_url.as_ref().unwrap().clone())
     }
 }

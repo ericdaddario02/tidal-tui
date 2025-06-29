@@ -58,6 +58,7 @@ pub mod player;
 pub mod rtidalapi;
 
 use rtidalapi::{
+    AudioQuality,
     Session,
     Track,
     User,
@@ -397,6 +398,7 @@ impl App {
                     KeyCode::Char(' ') => self.toggle_play_pause().map_err(|e| eyre!(format!("{e}")))?,
                     KeyCode::Char('[') => self.previous_track().map_err(|e| eyre!(format!("{e}")))?,
                     KeyCode::Char(']') => self.next_track().map_err(|e| eyre!(format!("{e}")))?,
+                    KeyCode::Char(',') => self.cycle_audio_quality().map_err(|e| eyre!(format!("{e}")))?,
                     _ => {},
                 }
             }
@@ -542,6 +544,17 @@ impl App {
         tokio::task::spawn_blocking(move || {
             player_clone.lock().unwrap().next().unwrap();
         });
+
+        Ok(())
+    }
+
+    /// Cycles the audio quality settings.
+    fn cycle_audio_quality(&mut self) -> Result<(), Box<dyn Error>> {
+        match self.session.get_audio_quality() {
+            AudioQuality::Low96 => self.session.set_audio_quality(AudioQuality::Low320)?,
+            AudioQuality::Low320 => self.session.set_audio_quality(AudioQuality::High)?,
+            AudioQuality::High => self.session.set_audio_quality(AudioQuality::Low96)?,
+        }
 
         Ok(())
     }

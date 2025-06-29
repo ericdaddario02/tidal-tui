@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     error::Error,
     fs,
+    sync::Mutex,
 };
 
 use oauth2::{
@@ -40,7 +41,7 @@ pub struct Session {
     pkce_access_token: String,
     country_code: String,
     request_client: Client,
-    audio_quality: AudioQuality,
+    audio_quality: Mutex<AudioQuality>,
     /// A reference to the tidalapi.Session Python object. Used for the unofficial Tidal API.
     pub(super) py_tidalapi_session: PyObject
 }
@@ -107,7 +108,7 @@ impl Session {
             pkce_access_token: pkce_session.access_token,
             country_code,
             request_client,
-            audio_quality: AudioQuality::High,
+            audio_quality: Mutex::new(AudioQuality::High),
             py_tidalapi_session,
         })
     }
@@ -293,7 +294,7 @@ impl Session {
     }
 
     /// Sets the audio quality setting used for playback.
-    pub fn set_audio_quality(&mut self, quality: AudioQuality) -> Result<(), String> {
+    pub fn set_audio_quality(&self, quality: AudioQuality) -> Result<(), String> {
         let result = Python::with_gil(|py| -> PyResult<()> {
             let audio_quality_str = quality.to_tidalapi_string();
             self.py_tidalapi_session.setattr(py, "audio_quality", audio_quality_str)
@@ -302,7 +303,7 @@ impl Session {
         match result {
             Err(err) => Err(format!("A Python exception occurred:\n{}", err.to_string())),
             _ => {
-                self.audio_quality = quality;
+                *self.audio_quality.lock().map_err(|e| format!("{e:#?}"))? = quality;
                 Ok(())
             },
         }
@@ -310,6 +311,6 @@ impl Session {
 
     /// Returns this sessions current audio quality setting.
     pub fn get_audio_quality(&self) -> AudioQuality {
-        self.audio_quality
+        *self.audio_quality.lock().unwrap()
     }
 }

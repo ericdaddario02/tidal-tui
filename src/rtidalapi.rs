@@ -1,5 +1,5 @@
 /// Audio quality options in Tidal.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AudioQuality {
     /// 96 kbps
     Low96,
