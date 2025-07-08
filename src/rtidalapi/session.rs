@@ -2,7 +2,8 @@ use std::{
     collections::HashMap,
     error::Error,
     fs,
-    sync::Mutex,
+    path::Path,
+    sync::Mutex
 };
 
 use oauth2::{
@@ -54,16 +55,18 @@ impl Session {
 
     /// Returns a new logged in `Session`.
     /// 
-    /// If there is no existing previous session, the user must follow a link to login to Tidal.
-    pub fn new(client_id: &str, client_secret: &str) -> Result<Self, String> {
+    /// If there is no existing previous session, the user must follow a link to login to Tidal. \
+    /// `session_folder_path` is the directory path that the session info files will be stored.
+    pub fn new(client_id: &str, client_secret: &str, session_folder_path: &str) -> Result<Self, String> {
         let request_client = Client::new();
 
-        let session_exists = fs::exists("tidal-session.toml")
+        let session_file_path = Path::new(session_folder_path).join("tidal-session.toml");
+        let session_exists = fs::exists(&session_file_path)
             .map_err(|e| format!("{e}"))?;
         
         let pkce_session: TidalSessionInfo = if session_exists {
             // Restore existing Tidal session.
-            let toml_str = fs::read_to_string("tidal-session.toml")
+            let toml_str = fs::read_to_string(&session_file_path)
                 .map_err(|e| format!("{e}"))?;
             let existing_session: TidalSessionInfo = toml::from_str(&toml_str)
                 .map_err(|e| format!("{e}"))?;
@@ -89,6 +92,9 @@ impl Session {
                 refresh_token: existing_session.refresh_token,
             }
         } else {
+            fs::create_dir_all(&session_folder_path)
+                .map_err(|e| format!("{e}"))?;
+
             // Create a new Tidal session by having the user login with their credentials.
             Self::new_ouath_pkce_login(client_id, client_secret)
                 .map_err(|e| format!("{e}"))?
@@ -97,11 +103,11 @@ impl Session {
         // Store Tidal session info to file.
         let toml_str = toml::to_string(&pkce_session)
             .map_err(|e| format!("{e}"))?;
-        fs::write("tidal-session.toml", toml_str)
+        fs::write(&session_file_path, toml_str)
             .map_err(|e| format!("{e}"))?;
 
         // Get unofficial Tidal API session.
-        let (py_tidalapi_session, access_token, country_code) = Self::new_python_tidalapi_session()?;
+        let (py_tidalapi_session, access_token, country_code) = Self::new_python_tidalapi_session(session_folder_path)?;
 
         Ok(Self {
             access_token,
@@ -138,11 +144,13 @@ impl Session {
         println!("Please open this URL in your web browser to login to Tidal:");
         println!("\n{}\n", auth_url);
         println!("After logging in, copy the entire URL from your browser's address bar, paste it here, and press ENTER.");
-        println!("After pressing ENTER, you may have to log in a second time with another link to enable playback and other unofficial API features.");
+        println!("After pressing ENTER, you may have to log in a second time with another link to enable playback and other unofficial API features.\n");
 
         // Parse redirect URL.
         let mut redirect_url = String::new();
         std::io::stdin().read_line(&mut redirect_url)?;
+        println!("");
+
         let pasted_redirect_url = redirect_url.trim();
         let parsed_redirect_url = Url::parse(pasted_redirect_url)?;
 
@@ -189,8 +197,12 @@ impl Session {
     }
 
     /// Prints a login link for the user, and returns a Python tidalapi session object as well as the access token and country code upon successful login.
-    fn new_python_tidalapi_session() -> Result<(PyObject, String, String), String> {
+    /// 
+    /// `session_folder_path` is the directory path that the unofficial session info file will be stored.
+    fn new_python_tidalapi_session(session_folder_path: &str) -> Result<(PyObject, String, String), String> {
         pyo3::prepare_freethreaded_python();
+
+        let session_file_path = Path::new(session_folder_path).join("unofficial-tidal-session.json");
 
         let result = Python::with_gil(|py| -> PyResult<Option<(PyObject, String, String)>> {
             let tidalapi = PyModule::import(py, "tidalapi")?;
@@ -198,7 +210,7 @@ impl Session {
 
             let pathlib = PyModule::import(py, "pathlib")?;
             let path_type = pathlib.getattr("Path")?;
-            let oauth_file_path = path_type.call1(("unofficial-tidal-session.json",))?;
+            let oauth_file_path = path_type.call1((&session_file_path,))?;
 
             let login_result = session.call_method1("login_session_file", (oauth_file_path,))?;
             let login_result: bool = login_result.extract()?;

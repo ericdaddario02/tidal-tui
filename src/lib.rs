@@ -89,8 +89,14 @@ impl App {
     pub fn init() -> Result<Self, Box<dyn Error>> {
         dotenv().ok();
 
+        let full_config_path = format!("{}{}", env::var("HOME")?, "/.config/tidal-tui");
+
         let session = Arc::new(
-            Session::new(&env::var("TIDAL_CLIENT_ID")?, &env::var("TIDAL_CLIENT_SECRET")?).unwrap()
+            Session::new(
+                &env::var("TIDAL_CLIENT_ID")?,
+                &env::var("TIDAL_CLIENT_SECRET")?,
+                &full_config_path,
+            ).unwrap()
         );
 
         let user = rtidalapi::User::get_current_user(Arc::clone(&session))?;
