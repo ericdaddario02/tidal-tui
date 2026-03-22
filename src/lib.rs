@@ -378,8 +378,8 @@ impl App {
         let volume = unlocked_player.get_volume();
         let quality = self.session.get_audio_quality();
 
-        f.render_widget(Line::from(format!("Volume: {}%", volume)).right_aligned(), right_layout[1]);
-        f.render_widget(Line::from(format!("Quality: {}", quality.to_string())).right_aligned(), right_layout[2]);
+        f.render_widget(Line::from(format!("Volume: {}%", volume)).right_aligned(), right_layout[0]);
+        f.render_widget(Line::from(format!("Quality: {}", quality.to_string())).right_aligned(), right_layout[1]);
     }
 
     /// Handles user input events and updates application state accordingly.

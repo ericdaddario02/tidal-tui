@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     sync::{
         Arc,
         Mutex,
@@ -41,11 +42,11 @@ pub struct Track {
 pub struct TrackAttributes {
     pub title: String,
     #[serde(default)]
-    pub version: String,
+    pub version: Option<String>,
     pub isrc: String,
     pub duration: String,
     #[serde(default)]
-    pub copyright: String,
+    pub copyright: HashMap<String, String>,
     pub explicit: bool,
     pub popularity: f32,
     pub availability: Vec<String>,

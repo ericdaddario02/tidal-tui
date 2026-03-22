@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     sync::Arc,
     time::Duration
 };
@@ -34,7 +35,7 @@ pub struct AlbumAttributes {
     pub duration: String,
     pub explicit: bool,
     pub release_date: String,
-    pub copyright: String,
+    pub copyright: HashMap<String, String>,
     pub popularity: f32,
     pub availability: Vec<String>,
     pub media_tags: Vec<String>,
