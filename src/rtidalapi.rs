@@ -1,5 +1,5 @@
 /// Audio quality options in Tidal.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub enum AudioQuality {
     /// 96 kbps
     Low96,
@@ -7,7 +7,7 @@ pub enum AudioQuality {
     Low320,
     /// 16-bit, 44.1 kHz
     High,
-    // Max quality not currently supported.
+    // TODO: Max quality not currently supported.
     // /// Up to 24-bit, 192 kHz
     // Max,
 } 

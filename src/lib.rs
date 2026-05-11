@@ -99,7 +99,7 @@ impl App {
             ).unwrap()
         );
 
-        let user = rtidalapi::User::get_current_user(Arc::clone(&session))?;
+        let user = Arc::new(User::get_current_user(Arc::clone(&session))?);
 
         // Set the AppEvent buffer to 2 to ignore multiple stored rerender events.
         const MAX_APP_EVENTS: usize = 2;
@@ -116,7 +116,7 @@ impl App {
             exit: false,
             player,
             session,
-            user: Arc::new(user),
+            user: user,
             tx,
             rx,
             collection_tracks: Arc::new(Mutex::new(vec![])),

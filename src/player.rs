@@ -45,6 +45,13 @@ struct PlayerOutputStreamWrapper {
 unsafe impl Send for PlayerOutputStreamWrapper {}
 unsafe impl Sync for PlayerOutputStreamWrapper {}
 
+/// Volume normalization mode.
+pub enum NormalizationMode {
+    None,
+    Album,
+    Track,
+}
+
 /// Object responsible for playing audio and handling playback.
 pub struct Player {
     _stream: PlayerOutputStreamWrapper,
@@ -58,10 +65,12 @@ pub struct Player {
     position: Duration,
     is_playing: bool,
     volume: u32,
+    normalization_mode: NormalizationMode,
+    replay_gain: f32,
 }
 
 impl Player {
-    /// Set max volume because otherwise it is way too loud.
+    /// Set max volume for rodio because otherwise it is way too loud.
     const MAX_VOLUME: f32 = 0.15;
 
     /// Returns a new `Player`.
@@ -91,6 +100,8 @@ impl Player {
             position: Duration::from_secs(0),
             is_playing: false,
             volume: 50,
+            normalization_mode: NormalizationMode::Track,
+            replay_gain: 0.0,
         })
     }
 
@@ -174,19 +185,26 @@ impl Player {
 
     /// Sets this player's volume satiatingly between 0 and 100.
     pub fn set_volume(&mut self, volume: u32) {
-        if volume > 100 {
-            self.volume = 100;
-        } else {
-            self.volume = volume;
-        }
+        self.volume = std::cmp::min(volume, 100);
 
-        let volume_ratio = (volume as f32) / 100.0;
-        self.sink.set_volume(Self::MAX_VOLUME * volume_ratio);
+        Self::set_sink_volume(self);
     }
 
     /// Returns this player's volume.
     pub fn get_volume(&self) -> u32 {
         self.volume
+    }
+
+    fn db_to_linear(db: f32) -> f32 {
+        10f32.powf(db / 20.0)
+    }
+
+    /// Sets the rodio volume according to the user volume and the current replay gain.
+    fn set_sink_volume(&mut self) {
+        let volume_ratio = (self.volume as f32) / 100.0;
+        let linear_gain = Self::db_to_linear(self.replay_gain);
+
+        self.sink.set_volume(Self::MAX_VOLUME * volume_ratio * linear_gain);
     }
 
     /// Sets this player's queue and clears the currently playing track, if one exists.
@@ -208,6 +226,7 @@ impl Player {
         let track_url = track.get_url()?;
         let track_attributes = track.get_attribtues()?;
         let album = track.get_album()?;
+        let manifest = track.get_manifest()?;
 
         let track_title = &track_attributes.title;
         let album_title = &album.attributes.title;
@@ -216,6 +235,14 @@ impl Player {
         let cover_url = &album.cover_art_url;
 
         self.sink.clear();
+
+        self.replay_gain = match self.normalization_mode {
+            NormalizationMode::Album => manifest.album_audio_normalization_data.replay_gain,
+            NormalizationMode::Track => manifest.track_audio_normalization_data.replay_gain,
+            _ => 0.0,
+        };
+
+        Self::set_sink_volume(self);
 
         self.controls.set_metadata(MediaMetadata {
             title: Some(track_title),
@@ -250,6 +277,8 @@ impl Player {
             let _ = next_track.get_attribtues();
             let _ = next_track.get_album();
             let _ = next_track.get_artist();
+            // TODO: need to refetch manifest if quality changes before this song plays
+            let _ = next_track.get_manifest();
             let _ = next_track.get_url();
         }
 

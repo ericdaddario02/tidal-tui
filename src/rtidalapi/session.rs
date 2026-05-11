@@ -138,6 +138,7 @@ impl Session {
             .add_scope(Scope::new("collection.write".to_string()))
             .add_scope(Scope::new("playlists.read".to_string()))
             .add_scope(Scope::new("playlists.write".to_string()))
+            .add_scope(Scope::new("playback".to_string()))
             .set_pkce_challenge(pkce_challenge)
             .url();
 
@@ -256,7 +257,7 @@ impl Session {
             return Err(format!("GET request to {} failed with status code {}", endpoint, res.status()));
         }
 
-        let mut json: JSONValue = res.json()
+        let json: JSONValue = res.json()
             .map_err(|e| format!("Unable to parse API response into JSON: {}", e.to_string()))?;
         Ok(json)
     }
@@ -277,7 +278,7 @@ impl Session {
             return Err(format!("GET request to {} failed with status code {}", endpoint, res.status()));
         }
 
-        let mut json: JSONValue = res.json()
+        let json: JSONValue = res.json()
             .map_err(|e| format!("Unable to parse API response into JSON: {}", e.to_string()))?;
         Ok(json)
     }

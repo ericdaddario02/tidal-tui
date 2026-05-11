@@ -20,6 +20,7 @@ Note: This application is still a work in progress, so not all Tidal features ar
 - View and play all the tracks in your Collection.
 - Playback controls through the terminal (Play/Pause, Next/Previous, Shuffle, Volume controls, etc.).
 - OS media controls (*currently only supported on Linux*).
+- Volume normalization.
 
 ## Installation
 
@@ -67,7 +68,8 @@ You then need to register a Third-Party Application for your Tidal account:
     - `collection.write`
     - `collection.read`
     - `playlists.write`
-    - `playlists.read` 
+    - `playlists.read`
+    - `playback`
 5. In the `Overview` tab, copy the `Client ID` and `Client Secret` and create the environment variables `TIDAL_CLIENT_ID` and `TIDAL_CLIENT_SECRET` on your system (e.g. in your .bashrc/.zshrc/etc., or within a `.env` file in the same directory as your `tidal-tui` binary).
 
 Then go ahead and launch the application from wherever you placed the binary!
@@ -89,6 +91,9 @@ The ideal goal is to add all the Tidal features you would expect in the GUI/web 
 The following are features that I would like to implement in the future, split between `tidal-tui` (the TUI client) and `rtidalapi` (my WIP Tidal Rust library):
 
 ### tidal-tui
+- [ ] Volume normalization.
+  - [x] Track-based for My Collections - Tracks and playlists.
+  - [ ] Album-based for albums.
 - [ ] Toggle shuffle.
 - [ ] Toggle repeat.
 - [ ] Add track to queue.

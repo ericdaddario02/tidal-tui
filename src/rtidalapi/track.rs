@@ -31,6 +31,7 @@ pub struct Track {
     attributes: OnceCell<TrackAttributes>,
     album: OnceCell<Album>,
     artist: OnceCell<Artist>,
+    manifest: OnceCell<TrackManifest>,
     url: Arc<Mutex<Option<String>>>,
     url_audio_quality: Arc<Mutex<Option<AudioQuality>>>,
 }
@@ -53,6 +54,27 @@ pub struct TrackAttributes {
     pub media_tags: Vec<String>,
 }
 
+/// Normalization information used for both track and album normalization data.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NormalizationData {
+    pub peak_amplitude: f32,
+    pub replay_gain: f32,
+}
+
+/// A track's manifest.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackManifest {
+    pub album_audio_normalization_data: NormalizationData,
+    pub formats: Vec<String>,
+    pub hash: String,
+    pub preview_reason: Option<String>,
+    pub track_audio_normalization_data: NormalizationData,
+    pub track_presentation: String,
+    pub uri: String,
+}
+
 impl Track {
     /// Returns a new `Track` from a track's id.
     pub fn new(session: Arc<Session>, id: String) -> Result<Self, String> {
@@ -63,6 +85,7 @@ impl Track {
             attributes: OnceCell::new(),
             album: OnceCell::new(),
             artist: OnceCell::new(),
+            manifest: OnceCell::new(),
             url: Arc::new(Mutex::new(None)),
             url_audio_quality: Arc::new(Mutex::new(None)),
         })
@@ -127,6 +150,42 @@ impl Track {
             
             let artist = Artist::new(Arc::clone(&self.session), artist_id)?;
             Ok(artist)
+        })
+    }
+
+    /// Returns a reference to the `TrackManifest` associated with this track.
+    /// 
+    /// This `TrackManifest` is then cached within `self`.
+    pub fn get_manifest(&self) -> Result<&TrackManifest, String> {
+        self.manifest.get_or_try_init(|| -> Result<TrackManifest, String> {
+            let mut endpoint = format!(
+                "/trackManifests/{}?manifestType=MPEG_DASH&uriScheme=HTTPS&usage=PLAYBACK&adaptive=false",
+                self.id
+            );
+
+            let quality = self.session.get_audio_quality();
+
+            if quality >= AudioQuality::Low96 {
+                endpoint.push_str("&formats=HEAACV1");
+            }
+            if quality >= AudioQuality::Low320 {
+                endpoint.push_str("&formats=AACLC");
+            }
+            if quality >= AudioQuality::High {
+                endpoint.push_str("&formats=FLAC");
+            }
+            // TODO: MAX quality not yet supported
+            // if quality >= AudioQuality::Max {
+            //     endpoint.push_str("&formats=FLAC_HIRES");
+            // }
+
+            let mut data_json = self.session.get(&endpoint)?["data"].take();
+            let attributes_json = data_json["attributes"].take();
+
+            let attributes: TrackManifest = serde_json::from_value(attributes_json)
+                .map_err(|e| format!("Unable to parse track manifest API response: {}", e.to_string()))?;
+
+            Ok(attributes)
         })
     }
 
