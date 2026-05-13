@@ -27,31 +27,21 @@ Note: This application is still a work in progress, so not all Tidal features ar
 ### Build from Source
 
 Note: On Linux systems, you may need to download the following development packages first:
-- Packages for Ubuntu-based distros: `python3-dev`, `libasound2-dev`, `pkg-config`, `libssl-dev`
-- If you are using another distro, check out the documentation for [`pyo3`](https://github.com/PyO3/pyo3), [`rodio`](https://github.com/RustAudio/rodio), and [`openssl`](https://docs.rs/openssl/latest/openssl/) to see which packages you may need for your specific distro.
-
-The current version of this application requires a Python installation with the [`tidalapi`](https://github.com/EbbLabs/python-tidal) package installed. We recommend using a Python venv for `tidal-tui`, which can be created and used following the steps below.
+- Packages for Ubuntu-based distros: `libasound2-dev`, `pkg-config`, `libssl-dev`
+- If you are using another distro, check out the documentation for [`rodio`](https://github.com/RustAudio/rodio) and [`openssl`](https://docs.rs/openssl/latest/openssl/) to see which packages you may need for your specific distro.
 
 1. Install [Rust](https://www.rust-lang.org/tools/install) (Edition 2024) on your system.
-2. Install [Python](https://www.python.org/downloads/) on your system.
-3. Clone the repository:
+2. Clone the repository:
 ```
 git clone git@github.com:ericdaddario02/tidal-tui.git
 cd tidal-tui
 ```
-4. Set up your Python venv:
+3. Build or run `tidal-tui`:
 ```
-python -m venv venv
-source ./venv/bin/activate
-pip install tidalapi
-```
-5. Build or run `tidal-tui`:
-```
-# Build the application.
-# You can then copy the binary produced at ./target/release/tidal-tui and copy it to any other location (e.g. to a location in your $PATH).
+# Build the application binary.
 cargo build --release
 
-# Build and run the application all in one go.
+# Build and run the application.
 cargo run --release
 ```
 
@@ -77,10 +67,7 @@ Then go ahead and launch the application from wherever you placed the binary!
 ./tidal-tui
 ```
 
-When you launch `tidal-tui` for the first time, you will have to login to Tidal twice using two links. This is because we need two different types of sessions for different sets of features.
-
-The first link requires you to go to the Tidal login page and then paste the redirect link back into `tidal-tui`.
-The second link requires you to go to the Tidal login page and click continue until it says a device is linked.
+When you launch `tidal-tui` for the first time, you will have to login to Tidal by clicking on the link shown in the terminal (or pasting it into your browser). The link requires you to go to the Tidal login page and click continue until it says a device is linked. This connects your Tidal account to `tidal-tui`.
 
 You only have to login the first time, so after this you can go ahead and enjoy using `tidal-tui`!
 
@@ -108,17 +95,17 @@ The following are features that I would like to implement in the future, split b
 - [ ] My Collections - Artists tab.
 	- [ ] Display all artist albums and allow playing from these albums.
 	- [ ] Display all of an artist's tracks and allow playing from these.
-- [ ] Tab for each playlist.
-    - [ ] Display all their tracks and allow playing from these.
+- [ ] Playlists tab.
+    - [ ] Display tracks in a playlist and allow playing from these.
 - [ ] Search (for tracks, albums, artists).
 - [ ] Improve error displaying.
 - [ ] Get OS media controls to work on MacOS and Windows.
 
 
 ### ritdalapi
-- [ ] Remove dependence on py03/python.
-	- [ ] Be able to get a track's playback info without using the `tidalapi` python package.
+- [x] Remove dependence on py03/python.
 - [ ] Add support for MAX quality.
+- [ ] Switch the "My Collections - Tracks" API to the official endpoint.
 - [ ] Cache Album and Artist attributes like they are in Track.
 - [ ] Continue implementing the rest of the API endpoints.
 - [ ] Allow getting multiple tracks/albums/artists at once.

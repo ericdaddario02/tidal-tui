@@ -85,6 +85,8 @@ pub struct App {
 }
 
 impl App {
+    const DEFAULT_COUNTRY_CODE: &str = "CA";
+
     /// Initializes a new app.
     pub fn init() -> Result<Self, Box<dyn Error>> {
         dotenv().ok();
@@ -95,6 +97,7 @@ impl App {
             Session::new(
                 &env::var("TIDAL_CLIENT_ID")?,
                 &env::var("TIDAL_CLIENT_SECRET")?,
+                Self::DEFAULT_COUNTRY_CODE,
                 &full_config_path,
             ).unwrap()
         );

@@ -8,7 +8,6 @@ use std::{
 };
 
 use once_cell::sync::OnceCell;
-use pyo3::prelude::*;
 use regex::Regex;
 use serde::{Deserialize};
 use serde_json;
@@ -219,29 +218,30 @@ impl Track {
             Ok(Duration::from_secs((hours * 60 * 60) + (mins * 60) + (secs)))
         })
     }
+}
 
+#[cfg(feature = "unofficial")]
+impl Track {
     /// Gets the url used for playback for this track.
-    /// 
-    /// Uses the unofficial Tidal API. 
     pub fn get_url(&self) -> Result<String, String> {
         let mut unlocked_url = self.url.lock().map_err(|e| format!("{e:#?}"))?;
         let mut unlocked_url_audio_quality = self.url_audio_quality.lock().map_err(|e| format!("{e:#?}"))?;
 
         if unlocked_url.is_none() || unlocked_url_audio_quality.is_some_and(|quality| quality != self.session.get_audio_quality()) {
-            let result = Python::with_gil(|py| -> PyResult<String> {
-                let track = self.session.py_tidalapi_session.call_method1(py, "track", (&self.id,))?;
-                track.call_method0(py, "get_url")?.extract(py)
-            });
+            let endpoint = format!(
+                "/tracks/{}/urlpostpaywall?audioquality={}&urlusagemode=STREAM&assetpresentation=FULL",
+                self.id,
+                self.session.get_audio_quality().to_api_string(),
+            );
+            let json = self.session.get_unofficial(&endpoint)?;
 
-            match result {
-                Err(err) => {
-                    return Err(format!("A Python exception occurred:\n{}", err.to_string()));
-                },
-                Ok(track_url) => {
-                    *unlocked_url = Some(track_url);
-                    *unlocked_url_audio_quality = Some(self.session.get_audio_quality());
-                },
-            }
+            let url = json["urls"][0]
+                .as_str()
+                .ok_or(format!("Unable to get track url for track id {}", self.id))?
+                .to_string();
+
+            *unlocked_url = Some(url);
+            *unlocked_url_audio_quality = Some(self.session.get_audio_quality());
         }
 
         Ok(unlocked_url.as_ref().unwrap().clone())

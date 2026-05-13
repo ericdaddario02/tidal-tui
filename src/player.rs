@@ -71,7 +71,7 @@ pub struct Player {
 
 impl Player {
     /// Set max volume for rodio because otherwise it is way too loud.
-    const MAX_VOLUME: f32 = 0.15;
+    const MAX_VOLUME: f32 = 0.5;
 
     /// Returns a new `Player`.
     pub fn new() -> Result<Self, Box<dyn Error>> {

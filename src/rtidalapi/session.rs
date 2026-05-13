@@ -1,36 +1,53 @@
 use std::{
-    collections::HashMap,
-    error::Error,
+    
     fs,
     path::Path,
-    sync::Mutex
+    sync::Mutex,
 };
 
-use oauth2::{
-    AuthorizationCode,
-    AuthUrl,
-    basic::BasicClient,
-    ClientId,
-    ClientSecret,
-    CsrfToken,
-    PkceCodeChallenge,
-    RedirectUrl,
-    Scope,
-    TokenResponse,
-    TokenUrl
-};
-use pyo3::prelude::*;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JSONValue;
 use toml;
-use url::Url;
+
+#[cfg(not(feature = "unofficial"))]
+mod official_only_imports {
+    pub use std::error::Error;
+    pub use oauth2::{
+        AuthorizationCode,
+        AuthUrl,
+        basic::BasicClient,
+        ClientId,
+        ClientSecret,
+        CsrfToken,
+        PkceCodeChallenge,
+        RedirectUrl,
+        Scope,
+        TokenResponse,
+        TokenUrl
+    };
+    pub use url::Url;
+}
+
+#[cfg(not(feature = "unofficial"))]
+use official_only_imports::*;
+
+#[cfg(feature = "unofficial")]
+mod unofficial_only_imports {
+    pub use base64::{
+        engine::general_purpose::STANDARD as BASE64, 
+        Engine as _
+    };
+}
+
+#[cfg(feature = "unofficial")]
+use unofficial_only_imports::*;
 
 use super::AudioQuality;
 
 /// Struct used to persist session info.
 #[derive(Deserialize, Serialize)]
-struct TidalSessionInfo {
+struct SessionInfo {
     access_token: String,
     refresh_token: String,
 }
@@ -39,93 +56,146 @@ struct TidalSessionInfo {
 #[derive(Debug)]
 pub struct Session {
     access_token: String,
-    pkce_access_token: String,
     country_code: String,
     request_client: Client,
     audio_quality: Mutex<AudioQuality>,
-    /// A reference to the tidalapi.Session Python object. Used for the unofficial Tidal API.
-    pub(super) py_tidalapi_session: PyObject
 }
 
 impl Session {
     /// Base URL of the official Tidal API.
     const BASE_URL: &str = "https://openapi.tidal.com/v2";
-    /// Base URL of the unofficial Tidal API.
-    const UNOFFICIAL_BASE_URL: &str = "https://api.tidal.com/v1";
+
+    /// URL for the token endpoint.
+    const TOKEN_URL: &str = "https://auth.tidal.com/v1/oauth2/token";
 
     /// Returns a new logged in `Session`.
     /// 
     /// If there is no existing previous session, the user must follow a link to login to Tidal. \
     /// `session_folder_path` is the directory path that the session info files will be stored.
-    pub fn new(client_id: &str, client_secret: &str, session_folder_path: &str) -> Result<Self, String> {
+    /// 
+    /// If the `unofficial` feature is enabled, an unofficial session is created instead and `country_code` is ignored.
+   #[allow(unused_variables)]
+    pub fn new(client_id: &str, client_secret: &str, country_code: &str, session_folder_path: &str) -> Result<Self, String> {
         let request_client = Client::new();
 
-        let session_file_path = Path::new(session_folder_path).join("tidal-session.toml");
-        let session_exists = fs::exists(&session_file_path)
+        fs::create_dir_all(session_folder_path)
             .map_err(|e| format!("{e}"))?;
-        
-        let pkce_session: TidalSessionInfo = if session_exists {
-            // Restore existing Tidal session.
-            let toml_str = fs::read_to_string(&session_file_path)
-                .map_err(|e| format!("{e}"))?;
-            let existing_session: TidalSessionInfo = toml::from_str(&toml_str)
-                .map_err(|e| format!("{e}"))?;
 
-            // Get new access token from existing refresh token.
-            let mut body = HashMap::new();
-            body.insert("grant_type", "refresh_token");
-            body.insert("refresh_token", &existing_session.refresh_token);
-            body.insert("client_id", &client_id);
-            let res = request_client.post("https://auth.tidal.com/v1/oauth2/token")
-                .form(&body)
-                .send()
-                .map_err(|e| format!("Unable to get new access token with refresh token: {}", e.to_string()))?;
+        #[cfg(not(feature = "unofficial"))]
+        let (access_token, country_code) = {
+            let session_file = Path::new(session_folder_path).join("tidal-session.toml");
             
-            let json: JSONValue = res.json()
-                .map_err(|e| format!("Unable to parse API response into JSON: {}", e.to_string()))?;
-            let new_access_token = json["access_token"].as_str()
-                .ok_or("Failed to get access token")?
-                .to_string();
+            let access_token = Self::get_session(&request_client, &session_file, client_id, client_secret)?;
 
-            TidalSessionInfo {
-                access_token: new_access_token,
-                refresh_token: existing_session.refresh_token,
-            }
-        } else {
-            fs::create_dir_all(&session_folder_path)
-                .map_err(|e| format!("{e}"))?;
-
-            // Create a new Tidal session by having the user login with their credentials.
-            Self::new_ouath_pkce_login(client_id, client_secret)
-                .map_err(|e| format!("{e}"))?
+            (access_token, country_code.to_string())
         };
 
-        // Store Tidal session info to file.
-        let toml_str = toml::to_string(&pkce_session)
-            .map_err(|e| format!("{e}"))?;
-        fs::write(&session_file_path, toml_str)
-            .map_err(|e| format!("{e}"))?;
+        #[cfg(feature = "unofficial")]
+        let (access_token, country_code) = {
+            let unofficial_session_file = Path::new(session_folder_path).join("unofficial-tidal-session.toml");
 
-        // Get unofficial Tidal API session.
-        let (py_tidalapi_session, access_token, country_code) = Self::new_python_tidalapi_session(session_folder_path)?;
+            let access_token = Self::get_unofficial_session(
+                &request_client,
+                &unofficial_session_file,
+            )?;
+
+            let country_code = Self::fetch_country_code(&request_client, &access_token)?;
+
+            (access_token, country_code)
+        };
 
         Ok(Self {
             access_token,
-            pkce_access_token: pkce_session.access_token,
             country_code,
             request_client,
             audio_quality: Mutex::new(AudioQuality::High),
-            py_tidalapi_session,
         })
     }
 
+    /// Makes a GET request to the Tidal API.
+    pub(super) fn get(&self, endpoint: &str) -> Result<JSONValue, String> {
+        let url = if endpoint.contains("?") {
+            format!("{}{}&countryCode={}", Self::BASE_URL, endpoint, self.country_code)
+        } else {
+            format!("{}{}?countryCode={}", Self::BASE_URL, endpoint, self.country_code)
+        };
+        let res = self.request_client.get(url)
+            .bearer_auth(&self.access_token)
+            .send()
+            .map_err(|e| format!("Unable to send GET request to {}: {}", endpoint, e.to_string()))?;
+
+        if !res.status().is_success() {
+            return Err(format!("GET request to {} failed with status code {}", endpoint, res.status()));
+        }
+
+        let json: JSONValue = res.json()
+            .map_err(|e| format!("Unable to parse API response into JSON: {}", e.to_string()))?;
+        Ok(json)
+    }
+
+    // TODO: remove mutex
+    /// Sets the audio quality setting used for playback.
+    pub fn set_audio_quality(&self, quality: AudioQuality) -> Result<(), String> {
+        *self.audio_quality.lock().unwrap() = quality;
+
+        Ok(())
+    }
+
+    /// Returns this sessions current audio quality setting.
+    pub fn get_audio_quality(&self) -> AudioQuality {
+        *self.audio_quality.lock().unwrap()
+    }
+}
+
+#[cfg(not(feature = "unofficial"))]
+impl Session {
+    /// URL for the OAuth2 PKCE auth endpoint.
+    const AUTH_URL: &str = "https://login.tidal.com/authorize";
+
+    /// Restores or creates a new (OAuth2 PKCE) session and returns the access token.
+    fn get_session(request_client: &Client, session_file: &Path, client_id: &str, client_secret: &str) -> Result<String, String> {
+        // Try to restore from file if it exists.
+        if session_file.exists() {
+            let toml_str = fs::read_to_string(session_file)
+                .map_err(|e| format!("{e}"))?;
+
+            if let Ok(existing) = toml::from_str::<SessionInfo>(&toml_str) {
+                // Get new access token from existing refresh token.
+                match Self::refresh_access_token(request_client, &existing.refresh_token, client_id) {
+                    Ok(refreshed) => {
+                        let toml_str = toml::to_string(&refreshed)
+                            .map_err(|e| format!("{e}"))?;
+                        fs::write(session_file, toml_str)
+                            .map_err(|e| format!("{e}"))?;
+
+                        return Ok(refreshed.access_token);
+                    },
+                    Err(e) => {
+                        eprintln!("Failed to refresh access token, performing new login: {}", e);
+                    },
+                }
+            }
+        }
+
+        // No valid session — perform new PKCE login.
+        let new_session = Self::new_ouath_pkce_login(client_id, client_secret)
+            .map_err(|e| format!("{e}"))?;
+
+        let toml_str = toml::to_string(&new_session)
+            .map_err(|e| format!("{e}"))?;
+        fs::write(session_file, toml_str)
+            .map_err(|e| format!("{e}"))?;
+
+        Ok(new_session.access_token)
+    }
+
     /// Performs the OAuth2 PKCE Tidal login sequence.
-    fn new_ouath_pkce_login(client_id: &str, client_secret: &str) -> Result<TidalSessionInfo, Box<dyn Error>> {
+    fn new_ouath_pkce_login(client_id: &str, client_secret: &str) -> Result<SessionInfo, Box<dyn Error>> {
         // Create an OAuth2 client.
         let client = BasicClient::new(ClientId::new(client_id.to_string()))
             .set_client_secret(ClientSecret::new(client_secret.to_string()))
-            .set_auth_uri(AuthUrl::new("https://login.tidal.com/authorize".to_string())?)
-            .set_token_uri(TokenUrl::new("https://auth.tidal.com/v1/oauth2/token".to_string())?)
+            .set_auth_uri(AuthUrl::new(Self::AUTH_URL.to_string())?)
+            .set_token_uri(TokenUrl::new(Self::TOKEN_URL.to_string())?)
             .set_redirect_uri(RedirectUrl::new("http://localhost".to_string())?);
 
         let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
@@ -145,7 +215,6 @@ impl Session {
         println!("Please open this URL in your web browser to login to Tidal:");
         println!("\n{}\n", auth_url);
         println!("After logging in, copy the entire URL from your browser's address bar, paste it here, and press ENTER.");
-        println!("After pressing ENTER, you may have to log in a second time with another link to enable playback and other unofficial API features.\n");
 
         // Parse redirect URL.
         let mut redirect_url = String::new();
@@ -191,96 +260,249 @@ impl Session {
         let access_token = token_result.access_token().secret().to_string();
         let refresh_token = token_result.refresh_token().ok_or("No refresh token")?.secret().to_string();
         
-        Ok(TidalSessionInfo {
+        Ok(SessionInfo {
             access_token,
             refresh_token,
         })
     }
 
-    /// Prints a login link for the user, and returns a Python tidalapi session object as well as the access token and country code upon successful login.
+    /// Refreshes an access token using an existing refresh token.
+    fn refresh_access_token(request_client: &Client, refresh_token: &str, client_id: &str) -> Result<SessionInfo, String> {
+        let res = request_client.post(Self::TOKEN_URL)
+            .form(&[
+                ("grant_type", "refresh_token"),
+                ("refresh_token", &refresh_token),
+                ("client_id", &client_id),
+            ])
+            .send()
+            .map_err(|e| format!("Unable to get new access token with refresh token: {}", e.to_string()))?;
+
+        let json: JSONValue = res.json()
+            .map_err(|e| format!("Unable to parse API response into JSON: {}", e.to_string()))?;
+
+        if let Some(error) = json["error"].as_str() {
+            return Err(format!("Token refresh error: {}", error));
+        }
+
+        let new_access_token = json["access_token"].as_str()
+            .ok_or("Failed to get access token")?
+            .to_string();
+
+        Ok(SessionInfo {
+            access_token: new_access_token,
+            refresh_token: refresh_token.to_string(),
+        })
+    }
+}
+
+#[cfg(feature = "unofficial")]
+impl Session {
+    /// Base URL of the unofficial Tidal API.
+    const UNOFFICIAL_BASE_URL: &str = "https://api.tidal.com/v1";
+
+    /// URL for the unofficial Tidal API device auth.
+    const DEVICE_AUTH_URL: &str   = "https://auth.tidal.com/v1/oauth2/device_authorization";
+
+    /// Restores or creates a new unofficial (device auth) session and returns the access token.
+    fn get_unofficial_session(request_client: &Client, session_file: &Path) -> Result<String, String> {
+        // Try to restore from file if it exists.
+        if session_file.exists() {
+            let toml_str = fs::read_to_string(session_file)
+                .map_err(|e| format!("{e}"))?;
+
+            if let Ok(existing) = toml::from_str::<SessionInfo>(&toml_str) {
+                // Get new access token from existing refresh token.
+                match Self::refresh_unofficial_access_token(request_client, &existing.refresh_token) {
+                    Ok(refreshed) => {
+                        let toml_str = toml::to_string(&refreshed)
+                            .map_err(|e| format!("{e}"))?;
+                        fs::write(session_file, toml_str)
+                            .map_err(|e| format!("{e}"))?;
+
+                        return Ok(refreshed.access_token);
+                    },
+                    Err(e) => {
+                        eprintln!("Failed to refresh unofficial token, performing new login: {}", e);
+                    },
+                }
+            }
+        }
+
+        // No valid session — perform new device auth login.
+        let new_session = Self::new_device_auth_login(request_client)?;
+
+        let toml_str = toml::to_string(&new_session)
+            .map_err(|e| format!("{e}"))?;
+        fs::write(session_file, toml_str)
+            .map_err(|e| format!("{e}"))?;
+
+        Ok(new_session.access_token)
+    }
+
+    /// Returns `(client_id, client_secret)` to be used for unofficial API auth.
     /// 
-    /// `session_folder_path` is the directory path that the unofficial session info file will be stored.
-    fn new_python_tidalapi_session(session_folder_path: &str) -> Result<(PyObject, String, String), String> {
-        pyo3::prepare_freethreaded_python();
+    /// The client_id and client_secret values were taken from https://github.com/EbbLabs/python-tidal/blob/main/tidalapi/session.py.
+    fn get_client_id_and_secret() -> (String, String) {
+        let id_part1 = BASE64.decode(b"WmxneVNuaGtiVzUw").unwrap();
+        let id_part2 = BASE64.decode(b"V2xkTE1HbDRWQT09").unwrap();
+        
+        let mut id_combined = id_part1;
+        id_combined.extend_from_slice(&id_part2);
+        
+        let client_id = String::from_utf8(BASE64.decode(&id_combined).unwrap()).unwrap();
 
-        let session_file_path = Path::new(session_folder_path).join("unofficial-tidal-session.json");
+        let secret_part1 = BASE64.decode(b"TVU1dU9VRm1SRUZxZUhKblNrWktZa3RPVjB4bFFY").unwrap();
+        let secret_part2 = BASE64.decode(b"bExSMVpIYlVsT2RWaFFVRXhJVmxoQmRuaEJaejA9").unwrap();
+        
+        let mut secret_combined = secret_part1;
+        secret_combined.extend_from_slice(&secret_part2);
+        
+        let client_secret = String::from_utf8(BASE64.decode(&secret_combined).unwrap()).unwrap();
 
-        let result = Python::with_gil(|py| -> PyResult<Option<(PyObject, String, String)>> {
-            let tidalapi = PyModule::import(py, "tidalapi")?;
-            let session = tidalapi.call_method0("Session")?;
-
-            let pathlib = PyModule::import(py, "pathlib")?;
-            let path_type = pathlib.getattr("Path")?;
-            let oauth_file_path = path_type.call1((&session_file_path,))?;
-
-            let login_result = session.call_method1("login_session_file", (oauth_file_path,))?;
-            let login_result: bool = login_result.extract()?;
-            if login_result == false {
-                return Ok(None);
-            }
-
-            let access_token: Option<String> = session.getattr("access_token")?.extract()?;
-            let country_code: Option<String> = session.getattr("country_code")?.extract()?;
-            if access_token.is_none() || country_code.is_none() {
-                return Ok(None);
-            }
-
-            // Default to High quality.
-            let audio_quality_str = AudioQuality::High.to_tidalapi_string();
-            session.setattr("audio_quality", audio_quality_str)?;
-
-            Ok(Some(
-                (session.unbind(), access_token.unwrap(), country_code.unwrap())
-            ))
-        });
-
-        match result {
-            Err(err) => Err(format!("A Python exception occurred:\n{}", err.to_string())),
-            Ok(None) => Err(String::from("Login failure")),
-            Ok(Some(session_info)) => Ok(session_info),
-        }
+        (client_id, client_secret)
     }
 
-    /// Makes a GET request to the Tidal API.
-    pub(super) fn get(&self, endpoint: &str) -> Result<JSONValue, String> {
-        let url = if endpoint.contains("?") {
-            format!("{}{}&countryCode={}", Self::BASE_URL, endpoint, self.country_code)
-        } else {
-            format!("{}{}?countryCode={}", Self::BASE_URL, endpoint, self.country_code)
-        };
-        let res = self.request_client.get(url)
-            .bearer_auth(&self.access_token)
+    /// Performs the device authorization login flow using the unofficial Tidal client credentials.
+    fn new_device_auth_login(request_client: &Client) -> Result<SessionInfo, String> {
+        let (client_id, client_secret) = Self::get_client_id_and_secret();
+        let basic_auth = BASE64.encode(format!("{}:{}", client_id, client_secret));
+
+        let res = request_client
+            .post(Self::DEVICE_AUTH_URL)
+            .header("Authorization", format!("Basic {}", basic_auth))
+            .form(&[
+                ("client_id", client_id.as_str()),
+                ("scope", "r_usr w_usr w_sub")
+            ])
             .send()
-            .map_err(|e| format!("Unable to send GET request to {}: {}", endpoint, e.to_string()))?;
+            .map_err(|e| format!("Device auth request failed: {}", e))?;
 
         if !res.status().is_success() {
-            return Err(format!("GET request to {} failed with status code {}", endpoint, res.status()));
+            let status = res.status();
+            let body = res.text().unwrap_or_default();
+            return Err(format!("Device auth request failed with {}: {}", status, body));
         }
 
         let json: JSONValue = res.json()
-            .map_err(|e| format!("Unable to parse API response into JSON: {}", e.to_string()))?;
-        Ok(json)
+            .map_err(|e| format!("Failed to parse device auth response: {}", e))?;
+
+        let device_code = json["deviceCode"].as_str()
+            .ok_or("No deviceCode in device auth response")?
+            .to_string();
+        let user_code = json["userCode"].as_str()
+            .ok_or("No userCode in device auth response")?
+            .to_string();
+        let verification_uri = json["verificationUriComplete"].as_str()
+            .or_else(|| json["verificationUri"].as_str())
+            .ok_or("No verificationUri in device auth response")?
+            .to_string();
+        let expires_in = json["expiresIn"].as_f64().unwrap_or(300.0);
+        let interval = json["interval"].as_f64().unwrap_or(2.0);
+
+        // Ask the user to log in.
+        println!("Please open this URL in your web browser to login to Tidal:");
+        println!("\n  https://{}\n", verification_uri);
+        println!("Or visit https://tidal.com/activate and enter code: {}", user_code);
+
+        // Poll until the user has logged in or the code expires.
+        let poll_interval = std::time::Duration::from_secs_f64(interval.max(1.0));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs_f64(expires_in);
+
+        loop {
+            std::thread::sleep(poll_interval);
+
+            if std::time::Instant::now() > deadline {
+                return Err("Device authorization timed out — please try again.".to_string());
+            }
+
+            let poll_res = request_client
+                .post(Self::TOKEN_URL)
+                .header("Authorization", format!("Basic {}", basic_auth))
+                .form(&[
+                    ("client_id", client_id.as_str()),
+                    ("device_code", &device_code),
+                    ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+                    ("scope", "r_usr w_usr w_sub"),
+                ])
+                .send()
+                .map_err(|e| format!("Token poll request failed: {}", e))?;
+
+            let poll_json: JSONValue = poll_res.json()
+                .map_err(|e| format!("Failed to parse token poll response: {}", e))?;
+
+            if let Some(error) = poll_json["error"].as_str() {
+                match error {
+                    "authorization_pending" => continue,
+                    "expired_token" => return Err("Device authorization expired — please try again.".to_string()),
+                    other => return Err(format!("Authorization error: {}", other)),
+                }
+            }
+
+            let access_token = poll_json["access_token"].as_str()
+                .ok_or("No access_token in token response")?
+                .to_string();
+            let refresh_token = poll_json["refresh_token"].as_str()
+                .ok_or("No refresh_token in token response")?
+                .to_string();
+
+            return Ok(SessionInfo {
+                access_token,
+                refresh_token,
+            });
+        }
     }
 
-    /// Makes a GET request to the Tidal API using the pkce session.
-    pub(super) fn get_with_pkce(&self, endpoint: &str) -> Result<JSONValue, String> {
-        let url = if endpoint.contains("?") {
-            format!("{}{}&countryCode={}", Self::BASE_URL, endpoint, self.country_code)
-        } else {
-            format!("{}{}?countryCode={}", Self::BASE_URL, endpoint, self.country_code)
-        };
-        let res = self.request_client.get(url)
-            .bearer_auth(&self.pkce_access_token)
-            .send()
-            .map_err(|e| format!("Unable to send GET request to {}: {}", endpoint, e.to_string()))?;
+    /// Refreshes an unofficial access token using an existing refresh token.
+    fn refresh_unofficial_access_token(request_client: &Client, refresh_token: &str) -> Result<SessionInfo, String> {
+        let (client_id, client_secret) = Self::get_client_id_and_secret();
+        let basic_auth = BASE64.encode(format!("{}:{}", client_id, client_secret));
 
-        if !res.status().is_success() {
-            return Err(format!("GET request to {} failed with status code {}", endpoint, res.status()));
-        }
+        let res = request_client
+            .post(Self::TOKEN_URL)
+            .header("Authorization", format!("Basic {}", basic_auth))
+            .form(&[
+                ("client_id", client_id.as_str()),
+                ("refresh_token", refresh_token),
+                ("grant_type", "refresh_token"),
+                ("scope", "r_usr w_usr w_sub"),
+            ])
+            .send()
+            .map_err(|e| format!("Token refresh request failed: {}", e))?;
 
         let json: JSONValue = res.json()
-            .map_err(|e| format!("Unable to parse API response into JSON: {}", e.to_string()))?;
-        Ok(json)
+            .map_err(|e| format!("Failed to parse token refresh response: {}", e))?;
+
+        if let Some(error) = json["error"].as_str() {
+            return Err(format!("Token refresh error: {}", error));
+        }
+
+        let access_token = json["access_token"].as_str()
+            .ok_or("No access_token in refresh response")?
+            .to_string();
+        let new_refresh_token = json["refresh_token"].as_str()
+            .unwrap_or(refresh_token)
+            .to_string();
+
+        Ok(SessionInfo {
+            access_token,
+            refresh_token: new_refresh_token,
+        })
+    }
+
+    /// Fetches the country code for the currently logged in user from the unofficial API.
+    fn fetch_country_code(request_client: &Client, access_token: &str) -> Result<String, String> {
+        let res = request_client
+            .get("https://api.tidal.com/v1/sessions")
+            .bearer_auth(access_token)
+            .send()
+            .map_err(|e| format!("Failed to fetch session info: {}", e))?;
+
+        let json: JSONValue = res.json()
+            .map_err(|e| format!("Failed to parse session info: {}", e))?;
+
+        json["countryCode"].as_str()
+            .ok_or_else(|| "No countryCode in session response".to_string())
+            .map(|s| s.to_string())
     }
 
     /// Makes a GET request to the unofficial Tidal API.
@@ -304,26 +526,5 @@ impl Session {
             .map_err(|e| format!("Unable to parse (unofficial) API response into JSON: {}", e.to_string()))?;
 
         Ok(json)
-    }
-
-    /// Sets the audio quality setting used for playback.
-    pub fn set_audio_quality(&self, quality: AudioQuality) -> Result<(), String> {
-        let result = Python::with_gil(|py| -> PyResult<()> {
-            let audio_quality_str = quality.to_tidalapi_string();
-            self.py_tidalapi_session.setattr(py, "audio_quality", audio_quality_str)
-        });
-
-        match result {
-            Err(err) => Err(format!("A Python exception occurred:\n{}", err.to_string())),
-            _ => {
-                *self.audio_quality.lock().map_err(|e| format!("{e:#?}"))? = quality;
-                Ok(())
-            },
-        }
-    }
-
-    /// Returns this sessions current audio quality setting.
-    pub fn get_audio_quality(&self) -> AudioQuality {
-        *self.audio_quality.lock().unwrap()
     }
 }

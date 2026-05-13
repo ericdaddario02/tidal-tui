@@ -53,7 +53,10 @@ impl User {
             collection_tracks: OnceCell::new(),
         })
     }
+}
 
+#[cfg(feature = "unofficial")]
+impl User {
     /// Returns a list of tracks in the user's collection.
     pub fn get_collection_tracks(&self) -> Result<&Vec<Track>, String> {
         self.collection_tracks.get_or_try_init(|| -> Result<Vec<Track>, String> {
