@@ -25,7 +25,8 @@ use souvlaki::{
     MediaControls,
     MediaMetadata,
     MediaPlayback,
-    MediaPosition
+    MediaPosition,
+    PlatformConfig
 };
 use stream_download::{
     storage::memory::MemoryStorageProvider,
@@ -81,12 +82,12 @@ impl Player {
         let sink = Sink::try_new(&_stream_handle)?;
         sink.set_volume(Self::MAX_VOLUME / 2.0);
 
-        let config = souvlaki::PlatformConfig {
+        let config = PlatformConfig {
             dbus_name: "tidal-tui",
             display_name: "tidal-tui",
             hwnd: None,
         };
-        let controls = souvlaki::MediaControls::new(config)?;
+        let controls = MediaControls::new(config)?;
 
         Ok(Self {
             _stream: PlayerOutputStreamWrapper { _stream },
@@ -154,6 +155,13 @@ impl Player {
                         },
                         MediaControlEvent::SetPosition(MediaPosition(position)) => {
                             unlocked_player.set_position(position).unwrap();
+                        },
+                        MediaControlEvent::Toggle => {
+                            if unlocked_player.is_playing {
+                                unlocked_player.pause().unwrap();
+                            } else {
+                                unlocked_player.play().unwrap();
+                            }
                         },
                         _ => {},
                     }

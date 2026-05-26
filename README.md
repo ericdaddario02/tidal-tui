@@ -81,13 +81,15 @@ The following are features that I would like to implement in the future, split b
 - [ ] Volume normalization.
   - [x] Track-based for My Collections - Tracks and playlists.
   - [ ] Album-based for albums.
+- [x] Get OS media controls to work on MacOS and Windows.
 - [ ] Toggle shuffle.
 - [ ] Toggle repeat.
+- [ ] Start playing from a certain track.
+- [ ] Add support for MAX quality.
 - [ ] Add track to queue.
 - [ ] Play track next.
 - [ ] Prefetch next song using a tokio task (so this doesn't block rendering).
 - [ ] Add config file to save settings/options like volume, audio quality, etc.
-- [ ] Start playing from a certain track (instead of only having options Shuffle All and Play All).
 - [ ] Filter tracks (i.e. filter tracks in My Collection / Playlists / etc.).
 - [ ] Desktop notifications (at least on Linux).
 - [ ] My Collections - Albums tab.
@@ -99,12 +101,11 @@ The following are features that I would like to implement in the future, split b
     - [ ] Display tracks in a playlist and allow playing from these.
 - [ ] Search (for tracks, albums, artists).
 - [ ] Improve error displaying.
-- [ ] Get OS media controls to work on MacOS and Windows.
+- [ ] Get OS media controls to work on Windows.
 
 
 ### ritdalapi
 - [x] Remove dependence on py03/python.
-- [ ] Add support for MAX quality.
 - [ ] Switch the "My Collections - Tracks" API to the official endpoint.
 - [ ] Cache Album and Artist attributes like they are in Track.
 - [ ] Continue implementing the rest of the API endpoints.

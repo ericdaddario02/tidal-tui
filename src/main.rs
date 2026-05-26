@@ -7,6 +7,15 @@ use tidal_tui::App;
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
+    
+    #[cfg(not(target_os = "macos"))]
+    return run_tui().await;
+
+    #[cfg(target_os = "macos")]
+    return run_macos().await;
+}
+
+async fn run_tui() -> Result<()> {
     let mut app = tokio::task::spawn_blocking(|| {
         App::init()
         .unwrap_or_else(|e| {
@@ -18,4 +27,44 @@ async fn main() -> Result<()> {
     let result = app.run(&mut terminal);
     ratatui::restore();
     result
+}
+
+/// On macOS, souvlaki's media controls require AppKit's event loop to be
+/// running on the main thread. We pump a headless winit event loop here
+/// to satisfy that requirement, while the TUI runs on a Tokio worker thread.
+#[cfg(target_os = "macos")]
+async fn run_macos() -> Result<()> {
+    use std::sync::{Arc, Mutex};
+    use winit::application::ApplicationHandler;
+    use winit::event::WindowEvent;
+    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
+    use winit::window::WindowId;
+
+    let mut event_loop = EventLoop::new()?;
+
+    let running = Arc::new(Mutex::new(true));
+    let running_bg = running.clone();
+
+    tokio::spawn(async move {
+        run_tui().await.unwrap_or_else(|e| eprintln!("{e}"));
+        *running_bg.lock().unwrap() = false;
+    });
+
+    struct NoopApp;
+    impl ApplicationHandler for NoopApp {
+        fn resumed(&mut self, _: &ActiveEventLoop) {}
+        fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+    }
+
+    let mut noop = NoopApp;
+    loop {
+        let status = event_loop.pump_app_events(Some(std::time::Duration::from_millis(10)), &mut noop);
+
+        if matches!(status, PumpStatus::Exit(_)) || !*running.lock().unwrap() {
+            break;
+        }
+    }
+
+    Ok(())
 }
