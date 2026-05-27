@@ -34,6 +34,9 @@ use stream_download::{
     StreamDownload
 };
 
+#[cfg(target_os = "windows")]
+use winit::window::Window;
+
 use crate::{
     rtidalapi::Track,
     AppEvent,
@@ -68,6 +71,10 @@ pub struct Player {
     volume: u32,
     normalization_mode: NormalizationMode,
     replay_gain: f32,
+
+    #[cfg(target_os = "windows")]
+    /// Keeps the hidden window alive for the lifetime of the player.
+    _hwnd_window: Window,
 }
 
 impl Player {
@@ -82,10 +89,16 @@ impl Player {
         let sink = Sink::try_new(&_stream_handle)?;
         sink.set_volume(Self::MAX_VOLUME / 2.0);
 
+        #[cfg(not(target_os = "windows"))]
+        let hwnd = None;
+
+        #[cfg(target_os = "windows")]
+        let (hwnd, hwnd_window) = Self::init_windows_hwnd();
+
         let config = PlatformConfig {
             dbus_name: "tidal-tui",
             display_name: "tidal-tui",
-            hwnd: None,
+            hwnd,
         };
         let controls = MediaControls::new(config)?;
 
@@ -103,7 +116,29 @@ impl Player {
             volume: 50,
             normalization_mode: NormalizationMode::Track,
             replay_gain: 0.0,
+
+            #[cfg(target_os = "windows")]
+            _hwnd_window: hwnd_window,
         })
+    }
+
+    /// Initializes an invisible window to allow Souvlaki to work on Windows.
+    #[cfg(target_os = "windows")]
+    fn init_windows_hwnd() -> (*mut std::ffi::c_void, winit::window::Window) {
+        use winit::event_loop::EventLoop;
+        use winit::platform::windows::WindowExtWindows;
+        use winit::window::WindowBuilder;
+
+        let event_loop = EventLoop::new().unwrap();
+
+        let window = WindowBuilder::new()
+            .with_visible(false)
+            .build(&event_loop)
+            .unwrap();
+
+        let hwnd = window.hwnd() as *mut std::ffi::c_void;
+
+        (hwnd, window)
     }
 
     /// Spawns another thread to poll for playback position updates and media control events.

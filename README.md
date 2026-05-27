@@ -19,7 +19,7 @@ Note: This application is still a work in progress, so not all Tidal features ar
   - Available audio quality settings: Low (96 kbps), Low (320 kbps), High (16-bit 44.1 kHz).
 - View and play all the tracks in your Collection.
 - Playback controls through the terminal (Play/Pause, Next/Previous, Shuffle, Volume controls, etc.).
-- OS media controls (*currently only supported on Linux*).
+- OS media controls.
 - Volume normalization.
 
 ## Installation
@@ -101,7 +101,6 @@ The following are features that I would like to implement in the future, split b
     - [ ] Display tracks in a playlist and allow playing from these.
 - [ ] Search (for tracks, albums, artists).
 - [ ] Improve error displaying.
-- [ ] Get OS media controls to work on Windows.
 
 
 ### ritdalapi

@@ -74,7 +74,7 @@ impl Session {
     /// `session_folder_path` is the directory path that the session info files will be stored.
     /// 
     /// If the `unofficial` feature is enabled, an unofficial session is created instead and `country_code` is ignored.
-   #[allow(unused_variables)]
+    #[allow(unused_variables)]
     pub fn new(client_id: &str, client_secret: &str, country_code: &str, session_folder_path: &str) -> Result<Self, String> {
         let request_client = Client::new();
 
