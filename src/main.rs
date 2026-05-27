@@ -34,7 +34,6 @@ async fn run_tui() -> Result<()> {
 /// to satisfy that requirement, while the TUI runs on a Tokio worker thread.
 #[cfg(target_os = "macos")]
 async fn run_macos() -> Result<()> {
-    use std::sync::{Arc, Mutex};
     use winit::application::ApplicationHandler;
     use winit::event::WindowEvent;
     use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -42,26 +41,26 @@ async fn run_macos() -> Result<()> {
     use winit::window::WindowId;
 
     let mut event_loop = EventLoop::new()?;
-
-    let running = Arc::new(Mutex::new(true));
-    let running_bg = running.clone();
+    let proxy = event_loop.create_proxy();
 
     tokio::spawn(async move {
         run_tui().await.unwrap_or_else(|e| eprintln!("{e}"));
-        *running_bg.lock().unwrap() = false;
+        let _ = proxy.send_event(());
     });
 
     struct NoopApp;
     impl ApplicationHandler for NoopApp {
         fn resumed(&mut self, _: &ActiveEventLoop) {}
         fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+        fn user_event(&mut self, event_loop: &ActiveEventLoop, _: ()) {
+            event_loop.exit();
+        }
     }
 
     let mut noop = NoopApp;
     loop {
-        let status = event_loop.pump_app_events(Some(std::time::Duration::from_millis(10)), &mut noop);
-
-        if matches!(status, PumpStatus::Exit(_)) || !*running.lock().unwrap() {
+        let status = event_loop.pump_app_events(None, &mut noop);
+        if let PumpStatus::Exit(_) = status {
             break;
         }
     }

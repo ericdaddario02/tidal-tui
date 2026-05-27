@@ -158,7 +158,7 @@ impl Player {
                     if unlocked_player.is_playing {
                         let position = unlocked_player.sink.get_pos();
 
-                        if position != Duration::from_secs(0) && position == unlocked_player.position {
+                        if position == unlocked_player.position && position != Duration::ZERO {
                             // Track is over.
                             unlocked_player.next().unwrap();
                             let _ = app_tx.try_send(AppEvent::ReRender);
@@ -204,7 +204,7 @@ impl Player {
                     let _ = app_tx.try_send(AppEvent::ReRender);
                 }
 
-                thread::sleep(Duration::from_millis(100));
+                thread::sleep(Duration::from_millis(25));
             }
         });
 
