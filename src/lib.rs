@@ -91,7 +91,9 @@ impl App {
     pub fn init() -> Result<Self, Box<dyn Error>> {
         dotenv().ok();
 
-        let full_config_path = format!("{}{}", env::var("HOME")?, "/.config/tidal-tui");
+        let home = env::var("HOME")
+            .or_else(|_| env::var("USERPROFILE"))?;
+        let full_config_path = format!("{}/.config/tidal-tui", home);
 
         let session = Arc::new(
             Session::new(

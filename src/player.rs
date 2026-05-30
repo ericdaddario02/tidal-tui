@@ -34,9 +34,6 @@ use stream_download::{
     StreamDownload
 };
 
-#[cfg(target_os = "windows")]
-use winit::window::Window;
-
 use crate::{
     rtidalapi::Track,
     AppEvent,
@@ -74,7 +71,7 @@ pub struct Player {
 
     #[cfg(target_os = "windows")]
     /// Keeps the hidden window alive for the lifetime of the player.
-    _hwnd_window: Window,
+    _hwnd_window: winit::window::Window,
 }
 
 impl Player {
@@ -124,21 +121,27 @@ impl Player {
 
     /// Initializes an invisible window to allow Souvlaki to work on Windows.
     #[cfg(target_os = "windows")]
-    fn init_windows_hwnd() -> (*mut std::ffi::c_void, winit::window::Window) {
+    fn init_windows_hwnd() -> (Option<*mut std::ffi::c_void>, winit::window::Window) {
         use winit::event_loop::EventLoop;
-        use winit::platform::windows::WindowExtWindows;
-        use winit::window::WindowBuilder;
+        use winit::platform::windows::EventLoopBuilderExtWindows;
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use winit::window::Window;
 
-        let event_loop = EventLoop::new().unwrap();
-
-        let window = WindowBuilder::new()
-            .with_visible(false)
-            .build(&event_loop)
+        let event_loop = EventLoop::builder()
+            .with_any_thread(true)
+            .build()
             .unwrap();
 
-        let hwnd = window.hwnd() as *mut std::ffi::c_void;
+        let window = event_loop
+            .create_window(Window::default_attributes().with_visible(false))
+            .unwrap();
 
-        (hwnd, window)
+        let hwnd = match window.window_handle().unwrap().as_raw() {
+            RawWindowHandle::Win32(handle) => handle.hwnd.get() as *mut std::ffi::c_void,
+            _ => panic!("not running on Windows"),
+        };
+
+        (Some(hwnd), window)
     }
 
     /// Spawns another thread to poll for playback position updates and media control events.
