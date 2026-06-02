@@ -328,6 +328,16 @@ impl App {
 
         let unlocked_player = self.player.lock().unwrap(); 
 
+        let progress_bar_label = Span::styled("", Color::LightCyan);
+        let mut progress_bar = Gauge::default()
+            .gauge_style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .bg(Color::DarkGray)
+            )
+            .ratio(0.0)
+            .label(progress_bar_label);
+
         match unlocked_player.get_current_track() {
             Some(current_track) if current_track.has_info() => {
                 let track_title = current_track.get_attribtues().unwrap().title.clone();
@@ -341,31 +351,21 @@ impl App {
                 let position = unlocked_player.get_position();
                 let track_duration = current_track.get_duration().unwrap().clone();
                 let position_progress = (position.as_secs() as f64) / (track_duration.as_secs() as f64);
-                
-                let progress_bar_label = Span::styled("", Color::LightCyan);
-                let progress_bar = Gauge::default()
-                    .gauge_style(Color::Cyan)
-                    .on_dark_gray()
-                    .ratio(position_progress)
-                    .label(progress_bar_label);
+
+                progress_bar = progress_bar.ratio(position_progress);
+
                 f.render_widget(Line::from(format_duration(position)).right_aligned(), progress_layout[0]);
-                f.render_widget(progress_bar, progress_layout[1]);
                 f.render_widget(Line::from(format_duration(track_duration)).left_aligned(), progress_layout[2]);
             },
             _ => {
                 f.render_widget(Line::from("Nothing playing").dark_gray(), left_layout[0]);
 
-                let progress_bar_label = Span::styled("", Color::LightCyan);
-                let progress_bar = Gauge::default()
-                    .gauge_style(Color::Cyan)
-                    .on_dark_gray()
-                    .ratio(0.0)
-                    .label(progress_bar_label);
                 f.render_widget(Line::from("0:00").right_aligned(), progress_layout[0]);
-                f.render_widget(progress_bar, progress_layout[1]);
                 f.render_widget(Line::from("0:00").left_aligned(), progress_layout[2]);
             },
         }
+
+        f.render_widget(progress_bar, progress_layout[1]);
 
         let shuffle_str = if self.is_shuffle { "Shuffle: On    " } else { "Shuffle: Off    " };
         let playing_status_str = if unlocked_player.is_playing() { "||" } else { "> " };
