@@ -161,8 +161,7 @@ impl Player {
                     if unlocked_player.is_playing {
                         let position = unlocked_player.sink.get_pos();
 
-                        if position == unlocked_player.position && position != Duration::ZERO {
-                            // Track is over.
+                        if unlocked_player.sink.empty() {
                             unlocked_player.next().unwrap();
                             let _ = app_tx.try_send(AppEvent::ReRender);
                         } else {
