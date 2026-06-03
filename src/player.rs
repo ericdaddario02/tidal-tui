@@ -10,15 +10,17 @@ use std::{
     time::Duration
 };
 
+use dash_mpd::{MPD, parse};
+use futures_util::StreamExt;
 use rand::{
     seq::SliceRandom,
     rng
 };
 use rodio::{
     Decoder,
-    OutputStream,
-    OutputStreamHandle,
-    Sink
+    MixerDeviceSink,
+    DeviceSinkBuilder,
+    Player as Sink
 };
 use souvlaki::{
     MediaControlEvent,
@@ -29,19 +31,21 @@ use souvlaki::{
     PlatformConfig
 };
 use stream_download::{
+    async_read::AsyncReadStream,
     storage::memory::MemoryStorageProvider,
     Settings,
     StreamDownload
 };
+use tokio::io::AsyncWriteExt;
 
 use crate::{
     rtidalapi::Track,
     AppEvent,
 };
 
-/// Wrapper for rodio OutputStream so Player can be Send+Sync.
+/// Wrapper for rodio MixerDeviceSink so Player can be Send+Sync.
 struct PlayerOutputStreamWrapper {
-    _stream: OutputStream,
+    output_stream: MixerDeviceSink,
 }
 unsafe impl Send for PlayerOutputStreamWrapper {}
 unsafe impl Sync for PlayerOutputStreamWrapper {}
@@ -53,13 +57,23 @@ pub enum NormalizationMode {
     Track,
 }
 
+/// All the information we care about in the track manifests.
+pub struct ParsedManifest {
+    urls: Vec<String>,
+    codec: String,
+    sample_rate: String,
+    bit_depth: String,
+    content_length: u64,
+}
+
 /// Object responsible for playing audio and handling playback.
 pub struct Player {
-    _stream: PlayerOutputStreamWrapper,
-    _stream_handle: OutputStreamHandle,
+    _output_stream: PlayerOutputStreamWrapper,
     sink: Sink,
-    controls: MediaControls,
+    request_client: reqwest::blocking::Client,
+    async_request_client: reqwest::Client,
     tokio_rt: tokio::runtime::Runtime,
+    controls: MediaControls,
     current_track: Option<Track>,
     queue: VecDeque<Track>,
     queue_history: VecDeque<Track>,
@@ -82,8 +96,8 @@ impl Player {
     pub fn new() -> Result<Self, Box<dyn Error>> {
         let tokio_rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build()?;
 
-        let (_stream, _stream_handle) = OutputStream::try_default()?;
-        let sink = Sink::try_new(&_stream_handle)?;
+        let output_stream = DeviceSinkBuilder::open_default_sink()?;
+        let sink = Sink::connect_new(output_stream.mixer());
         sink.set_volume(Self::MAX_VOLUME / 2.0);
 
         #[cfg(not(target_os = "windows"))]
@@ -100,9 +114,10 @@ impl Player {
         let controls = MediaControls::new(config)?;
 
         Ok(Self {
-            _stream: PlayerOutputStreamWrapper { _stream },
-            _stream_handle,
+            _output_stream: PlayerOutputStreamWrapper { output_stream },
             sink,
+            request_client: reqwest::blocking::Client::new(),
+            async_request_client: reqwest::Client::new(),
             tokio_rt,
             controls,
             current_track: None,
@@ -206,7 +221,7 @@ impl Player {
                     let _ = app_tx.try_send(AppEvent::ReRender);
                 }
 
-                thread::sleep(Duration::from_millis(25));
+                thread::sleep(Duration::from_millis(50));
             }
         });
 
@@ -232,7 +247,7 @@ impl Player {
     pub fn set_volume(&mut self, volume: u32) {
         self.volume = std::cmp::min(volume, 100);
 
-        Self::set_sink_volume(self);
+        self.apply_volume_to_sink();
     }
 
     /// Returns this player's volume.
@@ -245,7 +260,7 @@ impl Player {
     }
 
     /// Sets the rodio volume according to the user volume and the current replay gain.
-    fn set_sink_volume(&mut self) {
+    fn apply_volume_to_sink(&mut self) {
         let volume_ratio = (self.volume as f32) / 100.0;
         let linear_gain = Self::db_to_linear(self.replay_gain);
 
@@ -268,10 +283,11 @@ impl Player {
 
     /// Replaces the current track with the given `Track` and starts playback.
     pub fn play_new_track(&mut self, track: Track) -> Result<(), Box<dyn Error>> {
-        let track_url = track.get_url()?;
         let track_attributes = track.get_attribtues()?;
         let album = track.get_album()?;
         let manifest = track.get_manifest()?;
+
+        let parsed_manifest = self.parse_manifest(&manifest.uri)?;
 
         let track_title = &track_attributes.title;
         let album_title = &album.attributes.title;
@@ -286,8 +302,7 @@ impl Player {
             NormalizationMode::Track => manifest.track_audio_normalization_data.replay_gain,
             _ => 0.0,
         };
-
-        Self::set_sink_volume(self);
+        self.apply_volume_to_sink();
 
         self.controls.set_metadata(MediaMetadata {
             title: Some(track_title),
@@ -298,20 +313,39 @@ impl Player {
         })?;
         self.controls.set_playback(MediaPlayback::Playing { progress: None })?;
 
-        let future = async {
-            let reader = StreamDownload::new_http(
-                track_url.parse()?,
+        let (mut writer, reader) = tokio::io::duplex(512 * 1024);
+
+        let client = self.async_request_client.clone();
+        let urls = parsed_manifest.urls;
+
+        self.tokio_rt.spawn(async move {
+            for url in urls {
+                match client.get(&url).send().await {
+                    Ok(resp) => {
+                        let mut stream = resp.bytes_stream();
+                        while let Some(chunk) = stream.next().await {
+                            match chunk {
+                                Ok(bytes) => { let _ = writer.write_all(&bytes).await; }
+                                Err(e) => { eprintln!("Error: {e}"); break; }
+                            }
+                        }
+                    }
+                    Err(e) => { eprintln!("Error: {e}"); break; }
+                }
+            }
+        });
+
+        let stream = self.tokio_rt.block_on(async {
+            StreamDownload::from_stream(
+                AsyncReadStream::new(reader, parsed_manifest.content_length),
                 MemoryStorageProvider,
                 Settings::default(),
-            ).await?;
+            ).await
+        })?;
 
-            let source = Decoder::new(reader)?;
-            self.sink.append(source);
-            self.sink.play();
-
-            Ok::<(), Box<dyn Error>>(())
-        };
-        self.tokio_rt.block_on(future)?;
+        let source = Decoder::new_mp4(stream)?;
+        self.sink.append(source);
+        self.sink.play();
 
         self.current_track = Some(track);
         self.is_playing = true;
@@ -324,10 +358,91 @@ impl Player {
             let _ = next_track.get_artist();
             // TODO: need to refetch manifest if quality changes before this song plays
             let _ = next_track.get_manifest();
-            let _ = next_track.get_url();
         }
 
         Ok(())
+    }
+
+    /// Parses an MPEG DASH manifest and returns the urls and audio file information (codec, sample rate, bit depth).
+    pub fn parse_manifest(&self, manifest_url: &str) -> Result<ParsedManifest, Box<dyn Error>> {
+        let xml = self.request_client.get(manifest_url).send()?.text()?;
+        let xml = regex::Regex::new(r#" group="[^"]*""#)?.replace_all(&xml, "").to_string();
+        let mpd: MPD = parse(&xml)?;
+
+        let mut urls = Vec::new();
+
+        let period = &mpd.periods[0];
+        let audio_set = period.adaptations.iter()
+            .find(|a| {
+                a.contentType.as_deref() == Some("audio")
+                || a.mimeType.as_deref().is_some_and(|m| m.starts_with("audio"))
+            })
+            .ok_or("No audio adaptation set")?;
+
+        let rep = audio_set.representations.iter()
+            .max_by_key(|r| r.bandwidth.unwrap_or(0))
+            .ok_or("No representations")?;
+
+        let seg_template = rep.SegmentTemplate.as_ref()
+            .or(audio_set.SegmentTemplate.as_ref())
+            .ok_or("No SegmentTemplate")?;
+
+        let rep_id = rep.id.as_deref().unwrap_or("0");
+        let codec = rep.codecs.as_deref().unwrap_or("").to_string();
+        let bandwidth = rep.bandwidth.unwrap_or(0);
+        let start_number = seg_template.startNumber.unwrap_or(1) as u64;
+        let base = manifest_url.rsplitn(2, '/').last().unwrap_or(manifest_url);
+
+        let mut rep_id_split = rep_id.split(',');
+
+        let _ = rep_id_split.next().unwrap_or("");  // quality string
+        let sample_rate = rep_id_split.next().unwrap_or("").to_string();
+        let bit_depth = rep_id_split.next().unwrap_or("").to_string();
+
+        let duration_secs = mpd.mediaPresentationDuration
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+        let content_length = ((duration_secs * (bandwidth as f64)) / 8.0) as u64;
+
+        let resolve = |template: &str, number: u64, time: u64| -> String {
+            let s = template
+                .replace("$RepresentationID$", rep_id)
+                .replace("$Number$", &number.to_string())
+                .replace("$Time$", &time.to_string())
+                .replace("$Bandwidth$", &bandwidth.to_string());
+            if s.starts_with("http") { s } else { format!("{base}/{s}") }
+        };
+
+        let init_url = seg_template.initialization.as_deref()
+            .map(|t| resolve(t, 0, 0))
+            .ok_or("No initialization template")?;
+        urls.push(init_url);
+
+        let timeline = seg_template.SegmentTimeline.as_ref()
+            .ok_or("No SegmentTimeline")?;
+
+        let media_template = seg_template.media.as_deref()
+            .ok_or("No media template")?;
+
+        let mut number = start_number;
+        let mut time: u64 = 0;
+
+        for s in &timeline.segments {
+            if let Some(t) = s.t { time = t as u64; }
+            for _ in 0..=s.r.unwrap_or(0).max(0) {
+                urls.push(resolve(media_template, number, time));
+                number += 1;
+                time += s.d as u64;
+            }
+        }
+
+        Ok(ParsedManifest {
+            urls,
+            codec,
+            sample_rate,
+            bit_depth,
+            content_length
+        })
     }
 
     /// Resumes playback if a track is paused, or starts playing the first track in the queue (if non-empty).
@@ -392,8 +507,16 @@ impl Player {
     /// Sets the position of playback in the player if there is a current track.
     pub fn set_position(&mut self, position: Duration) -> Result<(), Box<dyn Error>> {
         if self.current_track.is_some() {
+            // WORKAROUND: current rodio decoder creation does not allow backwards seeking
+            // unless we allow a large delay on Decoder creation. So, this hack performs
+            // backwards seeks by refetching and rebuilding the track's Decoder
+            if position < self.sink.get_pos() {
+                let track = self.current_track.take().unwrap();
+                self.play_new_track(track)?;
+            }
+
             self.sink.try_seek(position)?;
-            self.position = position;
+            self.position = self.sink.get_pos();
         }
 
         Ok(())

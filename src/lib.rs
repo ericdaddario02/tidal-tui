@@ -564,7 +564,8 @@ impl App {
         match self.session.get_audio_quality() {
             AudioQuality::Low96 => self.session.set_audio_quality(AudioQuality::Low320)?,
             AudioQuality::Low320 => self.session.set_audio_quality(AudioQuality::High)?,
-            AudioQuality::High => self.session.set_audio_quality(AudioQuality::Low96)?,
+            AudioQuality::High => self.session.set_audio_quality(AudioQuality::Max)?,
+            AudioQuality::Max => self.session.set_audio_quality(AudioQuality::Low96)?,
         }
 
         Ok(())

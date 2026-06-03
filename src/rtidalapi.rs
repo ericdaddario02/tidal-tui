@@ -7,9 +7,8 @@ pub enum AudioQuality {
     Low320,
     /// 16-bit, 44.1 kHz
     High,
-    // TODO: Max quality not currently supported.
-    // /// Up to 24-bit, 192 kHz
-    // Max,
+    /// Up to 24-bit, 192 kHz
+    Max,
 } 
 
 impl AudioQuality {
@@ -19,8 +18,7 @@ impl AudioQuality {
             Self::Low96 => String::from("Low (96 kbps)"),
             Self::Low320 => String::from("Low (320 kbps)"),
             Self::High => String::from("High"),
-            // Max quality not currently supported.
-            // Self::Max => String::from("Max"),
+            Self::Max => String::from("Max"),
         }
     }
 
@@ -31,8 +29,7 @@ impl AudioQuality {
             Self::Low96 => String::from("LOW"),
             Self::Low320 => String::from("HIGH"),
             Self::High => String::from("LOSSLESS"),
-            // Max quality not currently supported.
-            // Self::Max => String::from("HI_RES_LOSSLES"),
+            Self::Max => String::from("HI_RES_LOSSLES"),
         }
     }
 }

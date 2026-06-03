@@ -173,10 +173,9 @@ impl Track {
             if quality >= AudioQuality::High {
                 endpoint.push_str("&formats=FLAC");
             }
-            // TODO: MAX quality not yet supported
-            // if quality >= AudioQuality::Max {
-            //     endpoint.push_str("&formats=FLAC_HIRES");
-            // }
+            if quality >= AudioQuality::Max {
+                endpoint.push_str("&formats=FLAC_HIRES");
+            }
 
             let mut data_json = self.session.get(&endpoint)?["data"].take();
             let attributes_json = data_json["attributes"].take();

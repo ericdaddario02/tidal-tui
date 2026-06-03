@@ -108,7 +108,7 @@ impl Session {
             access_token,
             country_code,
             request_client,
-            audio_quality: Mutex::new(AudioQuality::High),
+            audio_quality: Mutex::new(AudioQuality::Max),
         })
     }
 

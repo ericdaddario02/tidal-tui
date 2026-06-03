@@ -15,8 +15,8 @@ Note: This application is still a work in progress, so not all Tidal features ar
 
 ### Supported Features
 
-- Supports playback up to 16-bit 44.1 kHz.
-  - Available audio quality settings: Low (96 kbps), Low (320 kbps), High (16-bit 44.1 kHz).
+- Supports playback in MAX quality (up to 24-bit 192 kHz).
+  - Available audio quality settings: Low (96 kbps), Low (320 kbps), High (16-bit 44.1 kHz), and Max (up to 24-bit 192 kHz).
 - View and play all the tracks in your Collection.
 - Playback controls through the terminal (Play/Pause, Next/Previous, Shuffle, Volume controls, etc.).
 - OS media controls.
@@ -82,10 +82,10 @@ The following are features that I would like to implement in the future, split b
   - [x] Track-based for My Collections - Tracks and playlists.
   - [ ] Album-based for albums.
 - [x] Get OS media controls to work on MacOS and Windows.
+- [x] Add support for MAX quality.
 - [ ] Toggle shuffle.
 - [ ] Toggle repeat.
 - [ ] Start playing from a certain track.
-- [ ] Add support for MAX quality.
 - [ ] Add track to queue.
 - [ ] Play track next.
 - [ ] Prefetch next song using a tokio task (so this doesn't block rendering).
