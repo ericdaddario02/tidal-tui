@@ -30,9 +30,8 @@ pub struct Track {
     attributes: OnceCell<TrackAttributes>,
     album: OnceCell<Album>,
     artist: OnceCell<Artist>,
-    manifest: OnceCell<TrackManifest>,
-    url: Arc<Mutex<Option<String>>>,
-    url_audio_quality: Arc<Mutex<Option<AudioQuality>>>,
+    manifest_cache: Arc<Mutex<Option<(TrackManifest, AudioQuality)>>>,
+    url_cache: Arc<Mutex<Option<(String, AudioQuality)>>>,
 }
 
 /// A track's API attributes.
@@ -84,9 +83,8 @@ impl Track {
             attributes: OnceCell::new(),
             album: OnceCell::new(),
             artist: OnceCell::new(),
-            manifest: OnceCell::new(),
-            url: Arc::new(Mutex::new(None)),
-            url_audio_quality: Arc::new(Mutex::new(None)),
+            manifest_cache: Arc::new(Mutex::new(None)),
+            url_cache: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -155,14 +153,15 @@ impl Track {
     /// Returns a reference to the `TrackManifest` associated with this track.
     /// 
     /// This `TrackManifest` is then cached within `self`.
-    pub fn get_manifest(&self) -> Result<&TrackManifest, String> {
-        self.manifest.get_or_try_init(|| -> Result<TrackManifest, String> {
+    pub fn get_manifest(&self) -> Result<TrackManifest, String> {
+        let mut cache = self.manifest_cache.lock().map_err(|e| format!("{e:#?}"))?;
+        let quality = self.session.get_audio_quality();
+
+        if cache.as_ref().map(|(_, quality)| quality) != Some(&quality) {
             let mut endpoint = format!(
                 "/trackManifests/{}?manifestType=MPEG_DASH&uriScheme=HTTPS&usage=PLAYBACK&adaptive=false",
                 self.id
             );
-
-            let quality = self.session.get_audio_quality();
 
             if quality >= AudioQuality::Low96 {
                 endpoint.push_str("&formats=HEAACV1");
@@ -182,9 +181,11 @@ impl Track {
 
             let attributes: TrackManifest = serde_json::from_value(attributes_json)
                 .map_err(|e| format!("Unable to parse track manifest API response: {}", e.to_string()))?;
+            
+            *cache = Some((attributes, quality));
+        }
 
-            Ok(attributes)
-        })
+        Ok(cache.as_ref().unwrap().0.clone())
     }
 
     /// Returns true if this Track already contains its attributes, album, and artist information.
@@ -223,14 +224,14 @@ impl Track {
 impl Track {
     /// Gets the url used for playback for this track.
     pub fn get_url(&self) -> Result<String, String> {
-        let mut unlocked_url = self.url.lock().map_err(|e| format!("{e:#?}"))?;
-        let mut unlocked_url_audio_quality = self.url_audio_quality.lock().map_err(|e| format!("{e:#?}"))?;
+        let mut cache = self.url_cache.lock().map_err(|e| format!("{e:#?}"))?;
+        let quality = self.session.get_audio_quality();
 
-        if unlocked_url.is_none() || unlocked_url_audio_quality.is_some_and(|quality| quality != self.session.get_audio_quality()) {
+        if cache.as_ref().map(|(_, quality)| quality) != Some(&quality) {
             let endpoint = format!(
                 "/tracks/{}/urlpostpaywall?audioquality={}&urlusagemode=STREAM&assetpresentation=FULL",
                 self.id,
-                self.session.get_audio_quality().to_api_string(),
+                quality.to_api_string(),
             );
             let json = self.session.get_unofficial(&endpoint)?;
 
@@ -239,10 +240,9 @@ impl Track {
                 .ok_or(format!("Unable to get track url for track id {}", self.id))?
                 .to_string();
 
-            *unlocked_url = Some(url);
-            *unlocked_url_audio_quality = Some(self.session.get_audio_quality());
+            *cache = Some((url, quality));
         }
 
-        Ok(unlocked_url.as_ref().unwrap().clone())
+        Ok(cache.as_ref().unwrap().0.clone())
     }
 }

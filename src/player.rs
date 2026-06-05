@@ -356,7 +356,6 @@ impl Player {
             let _ = next_track.get_attribtues();
             let _ = next_track.get_album();
             let _ = next_track.get_artist();
-            // TODO: need to refetch manifest if quality changes before this song plays
             let _ = next_track.get_manifest();
         }
 
