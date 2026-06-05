@@ -63,7 +63,10 @@ use rtidalapi::{
     Track,
     User,
 };
-use player::Player;
+use player::{
+    ParsedManifest,
+    Player,
+};
 
 pub enum AppEvent {
     ReRender,
@@ -356,6 +359,13 @@ impl App {
 
                 f.render_widget(Line::from(format_duration(position)).right_aligned(), progress_layout[0]);
                 f.render_widget(Line::from(format_duration(track_duration)).left_aligned(), progress_layout[2]);
+
+                if let Some(parsed_manifest) = unlocked_player.get_parsed_manifest() {
+                    f.render_widget(
+                        Line::from(self.get_quality_string(&parsed_manifest)).right_aligned(),
+                        right_layout[2]
+                    );
+                }
             },
             _ => {
                 f.render_widget(Line::from("Nothing playing").dark_gray(), left_layout[0]);
@@ -385,6 +395,20 @@ impl App {
 
         f.render_widget(Line::from(format!("Volume: {}%", volume)).right_aligned(), right_layout[0]);
         f.render_widget(Line::from(format!("Quality: {}", quality.to_string())).right_aligned(), right_layout[1]);
+    }
+
+    /// Returns a string displaying the quality of a track, based on its parsed manifest.
+    fn get_quality_string(&self, parsed_manifest: &ParsedManifest) -> String {
+        let codec = parsed_manifest.codec.to_uppercase();
+
+        if codec != "FLAC" {
+            return "".to_string();
+        }
+
+        let sample_rate: u32 = parsed_manifest.sample_rate.parse().unwrap();
+        let sample_rate = (sample_rate as f32 / 1000.0).to_string();
+
+        format!("{}-Bit {}kHz {}", parsed_manifest.bit_depth, sample_rate, codec)
     }
 
     /// Handles user input events and updates application state accordingly.

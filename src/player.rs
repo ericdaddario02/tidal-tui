@@ -59,11 +59,11 @@ pub enum NormalizationMode {
 
 /// All the information we care about in the track manifests.
 pub struct ParsedManifest {
-    urls: Vec<String>,
-    codec: String,
-    sample_rate: String,
-    bit_depth: String,
-    content_length: u64,
+    pub urls: Vec<String>,
+    pub codec: String,
+    pub sample_rate: String,
+    pub bit_depth: String,
+    pub content_length: u64,
 }
 
 /// Object responsible for playing audio and handling playback.
@@ -81,7 +81,10 @@ pub struct Player {
     is_playing: bool,
     volume: u32,
     normalization_mode: NormalizationMode,
+
+    // Information about the current track.
     replay_gain: f32,
+    parsed_manifest: Option<ParsedManifest>,
 
     #[cfg(target_os = "windows")]
     /// Keeps the hidden window alive for the lifetime of the player.
@@ -127,7 +130,9 @@ impl Player {
             is_playing: false,
             volume: 50,
             normalization_mode: NormalizationMode::Track,
+
             replay_gain: 0.0,
+            parsed_manifest: None,
 
             #[cfg(target_os = "windows")]
             _hwnd_window: hwnd_window,
@@ -255,6 +260,16 @@ impl Player {
         self.volume
     }
 
+    /// Returns this player's current ReplayGain value.
+    pub fn get_replay_gain(&self) -> f32 {
+        self.replay_gain
+    }
+
+    /// Returns this player's current `ParsedManifest` for the current track, if one exists.
+    pub fn get_parsed_manifest(&self) -> Option<&ParsedManifest> {
+        self.parsed_manifest.as_ref()
+    }
+
     fn db_to_linear(db: f32) -> f32 {
         10f32.powf(db / 20.0)
     }
@@ -316,7 +331,7 @@ impl Player {
         let (mut writer, reader) = tokio::io::duplex(512 * 1024);
 
         let client = self.async_request_client.clone();
-        let urls = parsed_manifest.urls;
+        let urls = parsed_manifest.urls.clone();
 
         self.tokio_rt.spawn(async move {
             for url in urls {
@@ -348,6 +363,7 @@ impl Player {
         self.sink.play();
 
         self.current_track = Some(track);
+        self.parsed_manifest = Some(parsed_manifest);
         self.is_playing = true;
         self.position = Duration::from_secs(0);
 
