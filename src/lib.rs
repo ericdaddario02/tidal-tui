@@ -25,7 +25,8 @@ use crossterm::event::{
 };
 use dotenv::dotenv;
 use ratatui::{
-    layout::{Constraint,
+    layout::{
+        Constraint,
         Direction,
         Layout,
         Rect,
@@ -80,6 +81,7 @@ pub struct App {
     user: Arc<User>,
     rx: mpsc::Receiver<AppEvent>,
     tx: mpsc::Sender<AppEvent>,
+    playing_from: Option<String>,
     collection_tracks: Arc<Mutex<Vec<Arc<Track>>>>,
     collection_tracks_len: Arc<AtomicUsize>,
     collection_tracks_fetched: Arc<AtomicBool>,
@@ -127,6 +129,7 @@ impl App {
             user: user,
             tx,
             rx,
+            playing_from: None,
             collection_tracks: Arc::new(Mutex::new(vec![])),
             collection_tracks_len: Arc::new(AtomicUsize::new(0)),
             collection_tracks_fetched: Arc::new(AtomicBool::new(false)),
@@ -274,11 +277,17 @@ impl App {
 
     /// Draws the now playing block.
     fn draw_now_playing(&mut self, f: &mut Frame, area: Rect) {
+        let mut title = Line::from(" Now Playing ".bold());
+
+        if let Some(playing_from) = &self.playing_from {
+            title.push_span(format!("- {} ", playing_from));
+        }
+
         let now_playing_block = Block::new()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .border_style(Color::Cyan)
-            .title(" Now Playing ".bold());
+            .title(title);
         f.render_widget(now_playing_block, area);
 
         let sections = Layout::default()
@@ -348,8 +357,8 @@ impl App {
                 let album_title = current_track.get_album().unwrap().attributes.title.clone();
 
                 f.render_widget(Line::from(track_title.bold()), left_layout[0]);
-                f.render_widget(Line::from(format!("{} - {}", artist_title, album_title)), left_layout[1]);
-                f.render_widget(Line::from("Playing From: Tracks".dark_gray()), left_layout[2]);
+                f.render_widget(Line::from(artist_title), left_layout[1]);
+                f.render_widget(Line::from(album_title), left_layout[2]);
 
                 let position = unlocked_player.get_position();
                 let track_duration = current_track.get_duration().unwrap().clone();
@@ -497,6 +506,7 @@ impl App {
             player_clone.lock().unwrap().play().unwrap();
         });
 
+        self.playing_from = Some("Tracks".to_string());
         self.is_shuffle = false;
 
         Ok(())
@@ -517,6 +527,7 @@ impl App {
             player_clone.lock().unwrap().play().unwrap();
         });
 
+        self.playing_from = Some("Tracks".to_string());
         self.is_shuffle = true;
 
         Ok(())
