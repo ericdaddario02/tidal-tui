@@ -104,10 +104,14 @@ impl Player {
     pub fn new() -> Result<Self, Box<dyn Error>> {
         let tokio_rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build()?;
 
-        let mut output_stream = DeviceSinkBuilder::from_default_device()?
-            .with_sample_rate(NonZero::new(44100).unwrap())
-            .open_sink_or_fallback()?;
+        let builder = DeviceSinkBuilder::from_default_device()?
+            .with_sample_rate(NonZero::new(44100).unwrap());
 
+        #[cfg(target_os = "macos")]
+        // Silence error messages when device sample rate changes.
+        let builder = builder.with_error_callback(|_| {});
+        
+        let mut output_stream = builder.open_sink_or_fallback()?;
         output_stream.log_on_drop(false);
 
         let sink = RodioPlayer::connect_new(output_stream.mixer());
@@ -152,10 +156,14 @@ impl Player {
     fn open_new_output_stream(&mut self, sample_rate: u32) -> Result<(), Box<dyn Error>> {
         self.sink.stop();
 
-        let mut output_stream = DeviceSinkBuilder::from_default_device()?
-            .with_sample_rate(NonZero::new(sample_rate).unwrap())
-            .open_sink_or_fallback()?;
+        let builder = DeviceSinkBuilder::from_default_device()?
+            .with_sample_rate(NonZero::new(sample_rate).unwrap());
 
+        #[cfg(target_os = "macos")]
+        // Silence error messages when device sample rate changes.
+        let builder = builder.with_error_callback(|_| {});
+        
+        let mut output_stream = builder.open_sink_or_fallback()?;
         output_stream.log_on_drop(false);
 
         let sink = RodioPlayer::connect_new(output_stream.mixer());
