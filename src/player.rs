@@ -1,6 +1,7 @@
 use std::{
     collections::VecDeque,
     error::Error,
+    num::NonZero,
     sync::{
         mpsc,
         Arc,
@@ -18,9 +19,9 @@ use rand::{
 };
 use rodio::{
     Decoder,
-    MixerDeviceSink,
     DeviceSinkBuilder,
-    Player as Sink
+    MixerDeviceSink,
+    Player as RodioPlayer
 };
 use souvlaki::{
     MediaControlEvent,
@@ -44,11 +45,15 @@ use crate::{
 };
 
 /// Wrapper for rodio MixerDeviceSink so Player can be Send+Sync.
-struct PlayerOutputStreamWrapper {
-    output_stream: MixerDeviceSink,
+struct MixerDeviceSinkWrapper(MixerDeviceSink);
+unsafe impl Send for MixerDeviceSinkWrapper {}
+unsafe impl Sync for MixerDeviceSinkWrapper {}
+impl std::ops::Deref for MixerDeviceSinkWrapper {
+    type Target = MixerDeviceSink;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
-unsafe impl Send for PlayerOutputStreamWrapper {}
-unsafe impl Sync for PlayerOutputStreamWrapper {}
 
 /// Volume normalization mode.
 pub enum NormalizationMode {
@@ -61,15 +66,15 @@ pub enum NormalizationMode {
 pub struct ParsedManifest {
     pub urls: Vec<String>,
     pub codec: String,
-    pub sample_rate: String,
-    pub bit_depth: String,
+    pub sample_rate: u32,
+    pub bit_depth: u32,
     pub content_length: u64,
 }
 
 /// Object responsible for playing audio and handling playback.
 pub struct Player {
-    _output_stream: PlayerOutputStreamWrapper,
-    sink: Sink,
+    output_stream: MixerDeviceSinkWrapper,
+    sink: RodioPlayer,
     request_client: reqwest::blocking::Client,
     async_request_client: reqwest::Client,
     tokio_rt: tokio::runtime::Runtime,
@@ -99,8 +104,13 @@ impl Player {
     pub fn new() -> Result<Self, Box<dyn Error>> {
         let tokio_rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build()?;
 
-        let output_stream = DeviceSinkBuilder::open_default_sink()?;
-        let sink = Sink::connect_new(output_stream.mixer());
+        let mut output_stream = DeviceSinkBuilder::from_default_device()?
+            .with_sample_rate(NonZero::new(44100).unwrap())
+            .open_sink_or_fallback()?;
+
+        output_stream.log_on_drop(false);
+
+        let sink = RodioPlayer::connect_new(output_stream.mixer());
         sink.set_volume(Self::MAX_VOLUME / 2.0);
 
         #[cfg(not(target_os = "windows"))]
@@ -117,7 +127,7 @@ impl Player {
         let controls = MediaControls::new(config)?;
 
         Ok(Self {
-            _output_stream: PlayerOutputStreamWrapper { output_stream },
+            output_stream: MixerDeviceSinkWrapper(output_stream),
             sink,
             request_client: reqwest::blocking::Client::new(),
             async_request_client: reqwest::Client::new(),
@@ -137,6 +147,23 @@ impl Player {
             #[cfg(target_os = "windows")]
             _hwnd_window: hwnd_window,
         })
+    }
+
+    fn open_new_output_stream(&mut self, sample_rate: u32) -> Result<(), Box<dyn Error>> {
+        self.sink.stop();
+
+        let mut output_stream = DeviceSinkBuilder::from_default_device()?
+            .with_sample_rate(NonZero::new(sample_rate).unwrap())
+            .open_sink_or_fallback()?;
+
+        output_stream.log_on_drop(false);
+
+        let sink = RodioPlayer::connect_new(output_stream.mixer());
+
+        self.output_stream = MixerDeviceSinkWrapper(output_stream);
+        self.sink = sink;
+
+        Ok(())
     }
 
     /// Initializes an invisible window to allow Souvlaki to work on Windows.
@@ -300,8 +327,8 @@ impl Player {
     pub fn play_new_track(&mut self, track: Track) -> Result<(), Box<dyn Error>> {
         let track_attributes = track.get_attribtues()?;
         let album = track.get_album()?;
-        let manifest = track.get_manifest()?;
 
+        let manifest = track.get_manifest()?;
         let parsed_manifest = self.parse_manifest(&manifest.uri)?;
 
         let track_title = &track_attributes.title;
@@ -311,6 +338,10 @@ impl Player {
         let cover_url = &album.cover_art_url;
 
         self.sink.clear();
+
+        if self.output_stream.config().sample_rate().get() != parsed_manifest.sample_rate {
+            self.open_new_output_stream(parsed_manifest.sample_rate)?;
+        }
 
         self.replay_gain = match self.normalization_mode {
             NormalizationMode::Album => manifest.album_audio_normalization_data.replay_gain,
@@ -411,8 +442,8 @@ impl Player {
         let mut rep_id_split = rep_id.split(',');
 
         let _ = rep_id_split.next().unwrap_or("");  // quality string
-        let sample_rate = rep_id_split.next().unwrap_or("").to_string();
-        let bit_depth = rep_id_split.next().unwrap_or("").to_string();
+        let sample_rate: u32 = rep_id_split.next().unwrap_or("44100").parse()?;
+        let bit_depth: u32 = rep_id_split.next().unwrap_or("16").parse()?;
 
         let duration_secs = mpd.mediaPresentationDuration
             .map(|d| d.as_secs_f64())

@@ -15,12 +15,13 @@ Note: This application is still a work in progress, so not all Tidal features ar
 
 ### Supported Features
 
-- Supports playback in MAX quality (up to 24-bit 192 kHz).
-  - Available audio quality settings: Low (96 kbps), Low (320 kbps), High (16-bit 44.1 kHz), and Max (up to 24-bit 192 kHz).
 - View and play all the tracks in your Collection.
+- Supports playback in MAX quality (up to 24-bit 192 kHz).
 - Playback controls through the terminal (Play/Pause, Next/Previous, Shuffle, Volume controls, etc.).
-- OS media controls.
-- Volume normalization.
+- OS media controls (Play/Pause, Next/Previous, Seek).
+- Volume normalization (currently only track-based).
+- Native PipeWire and PulseAudio support on Linux.
+- Dynamic sample rate switching to avoid resampling.
 
 ## Installation
 
@@ -75,7 +76,7 @@ You only have to login the first time, so after this you can go ahead and enjoy 
 
 The ideal goal is to add all the Tidal features you would expect in the GUI/web app.
 
-The following are features that I would like to implement in the future, split between `tidal-tui` (the TUI client) and `rtidalapi` (my WIP Tidal Rust library):
+The following are features that I would like to implement in the future, split between `tidal-tui` (the TUI client) and `rtidalapi` (the Tidal REST API wrapper):
 
 ### tidal-tui
 - [ ] Volume normalization.
@@ -83,6 +84,8 @@ The following are features that I would like to implement in the future, split b
   - [ ] Album-based for albums.
 - [x] Get OS media controls to work on MacOS and Windows.
 - [x] Add support for MAX quality.
+- [x] Native PipeWire and PulseAudio support on Linux.
+- [x] Dynamic sample rate switching.
 - [ ] Toggle shuffle.
 - [ ] Toggle repeat.
 - [ ] Start playing from a certain track.

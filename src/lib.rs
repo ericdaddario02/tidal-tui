@@ -405,8 +405,7 @@ impl App {
             return "".to_string();
         }
 
-        let sample_rate: u32 = parsed_manifest.sample_rate.parse().unwrap();
-        let sample_rate = (sample_rate as f32 / 1000.0).to_string();
+        let sample_rate = (parsed_manifest.sample_rate as f32 / 1000.0).to_string();
 
         format!("{}-Bit {}kHz {}", parsed_manifest.bit_depth, sample_rate, codec)
     }
