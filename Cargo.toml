@@ -1,6 +1,6 @@
 [package]
 name = "tidal-tui"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2024"
 
 [features]
@@ -9,6 +9,7 @@ unofficial = []
 
 [dependencies]
 base64 = "0.22.1"
+chrono = "0.4.45"
 color-eyre = "0.6.5"
 cpal = { version = "^0.18", features = ["pipewire", "pulseaudio"] }
 crossterm = "0.29.0"

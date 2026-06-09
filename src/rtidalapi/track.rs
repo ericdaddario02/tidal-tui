@@ -7,6 +7,7 @@ use std::{
     time::Duration
 };
 
+use chrono::Utc;
 use once_cell::sync::OnceCell;
 use regex::Regex;
 use serde::{Deserialize};
@@ -30,7 +31,7 @@ pub struct Track {
     attributes: OnceCell<TrackAttributes>,
     album: OnceCell<Album>,
     artist: OnceCell<Artist>,
-    manifest_cache: Arc<Mutex<Option<(TrackManifest, AudioQuality)>>>,
+    cached_manifest: Arc<Mutex<Option<CachedTrackManifest>>>,
     url_cache: Arc<Mutex<Option<(String, AudioQuality)>>>,
 }
 
@@ -73,6 +74,14 @@ pub struct TrackManifest {
     pub uri: String,
 }
 
+/// Wrapper used for `TrackManifest` caching.
+#[derive(Debug)]
+struct CachedTrackManifest {
+    manifest: TrackManifest,
+    quality: AudioQuality,
+    expires_at: i64,
+}
+
 impl Track {
     /// Returns a new `Track` from a track's id.
     pub fn new(session: Arc<Session>, id: String) -> Result<Self, String> {
@@ -83,7 +92,7 @@ impl Track {
             attributes: OnceCell::new(),
             album: OnceCell::new(),
             artist: OnceCell::new(),
-            manifest_cache: Arc::new(Mutex::new(None)),
+            cached_manifest: Arc::new(Mutex::new(None)),
             url_cache: Arc::new(Mutex::new(None)),
         })
     }
@@ -154,10 +163,15 @@ impl Track {
     /// 
     /// This `TrackManifest` is then cached within `self`.
     pub fn get_manifest(&self) -> Result<TrackManifest, String> {
-        let mut cache = self.manifest_cache.lock().map_err(|e| format!("{e:#?}"))?;
+        let mut cached_manifest = self.cached_manifest.lock().map_err(|e| format!("{e:#?}"))?;
         let quality = self.session.get_audio_quality();
 
-        if cache.as_ref().map(|(_, quality)| quality) != Some(&quality) {
+        let is_missing = cached_manifest.is_none();
+        let is_stale = cached_manifest.as_ref().is_some_and(|m| {
+            m.quality != quality || m.expires_at <= Utc::now().timestamp()
+        });
+
+        if is_missing || is_stale {
             let mut endpoint = format!(
                 "/trackManifests/{}?manifestType=MPEG_DASH&uriScheme=HTTPS&usage=PLAYBACK&adaptive=false",
                 self.id
@@ -179,13 +193,23 @@ impl Track {
             let mut data_json = self.session.get(&endpoint)?["data"].take();
             let attributes_json = data_json["attributes"].take();
 
-            let attributes: TrackManifest = serde_json::from_value(attributes_json)
+            let manifest: TrackManifest = serde_json::from_value(attributes_json)
                 .map_err(|e| format!("Unable to parse track manifest API response: {}", e.to_string()))?;
             
-            *cache = Some((attributes, quality));
+            let expires_at: i64 = manifest.uri
+                .split("token=")
+                .nth(1)
+                .ok_or("Manifest URI has no expires_at")?
+                .split('~')
+                .next()
+                .ok_or("Manifest URI has no expires_at")?
+                .parse::<i64>()
+                .map_err(|e| format!("Unable to parse track manifest expires_at: {}", e.to_string()))?;
+
+            *cached_manifest = Some(CachedTrackManifest { manifest, quality, expires_at });
         }
 
-        Ok(cache.as_ref().unwrap().0.clone())
+        Ok(cached_manifest.as_ref().unwrap().manifest.clone())
     }
 
     /// Returns true if this Track already contains its attributes, album, and artist information.

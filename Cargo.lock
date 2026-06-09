@@ -4796,9 +4796,10 @@ dependencies = [
 
 [[package]]
 name = "tidal-tui"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "base64",
+ "chrono",
  "color-eyre",
  "cpal",
  "crossterm 0.29.0",
