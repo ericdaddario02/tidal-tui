@@ -86,12 +86,12 @@ The following are features that I would like to implement in the future, split b
 - [x] Add support for MAX quality.
 - [x] Native PipeWire and PulseAudio support on Linux.
 - [x] Dynamic sample rate switching.
+- [x] Prefetch next song using a tokio task (so this doesn't block rendering).
 - [ ] Toggle shuffle.
 - [ ] Toggle repeat.
 - [ ] Start playing from a certain track.
 - [ ] Add track to queue.
 - [ ] Play track next.
-- [ ] Prefetch next song using a tokio task (so this doesn't block rendering).
 - [ ] Add config file to save settings/options like volume, audio quality, etc.
 - [ ] Filter tracks (i.e. filter tracks in My Collection / Playlists / etc.).
 - [ ] Desktop notifications (at least on Linux).

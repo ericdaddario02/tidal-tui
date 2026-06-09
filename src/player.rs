@@ -79,9 +79,9 @@ pub struct Player {
     async_request_client: reqwest::Client,
     tokio_rt: tokio::runtime::Runtime,
     controls: MediaControls,
-    current_track: Option<Track>,
-    queue: VecDeque<Track>,
-    queue_history: VecDeque<Track>,
+    current_track: Option<Arc<Track>>,
+    queue: VecDeque<Arc<Track>>,
+    queue_history: VecDeque<Arc<Track>>,
     position: Duration,
     is_playing: bool,
     volume: u32,
@@ -102,7 +102,10 @@ impl Player {
 
     /// Returns a new `Player`.
     pub fn new() -> Result<Self, Box<dyn Error>> {
-        let tokio_rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build()?;
+        let tokio_rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .enable_all()
+            .build()?;
 
         let builder = DeviceSinkBuilder::from_default_device()?
             .with_sample_rate(NonZero::new(44100).unwrap());
@@ -269,7 +272,7 @@ impl Player {
     }
 
     /// Returns a reference to the current track if one exists.
-    pub fn get_current_track(&self) -> Option<&Track> {
+    pub fn get_current_track(&self) -> Option<&Arc<Track>> {
         self.current_track.as_ref()
     }
 
@@ -318,9 +321,9 @@ impl Player {
     }
 
     /// Sets this player's queue and clears the currently playing track, if one exists.
-    pub fn set_queue(&mut self, tracks: VecDeque<Track>) {
+    pub fn set_queue(&mut self, tracks: Vec<Arc<Track>>) {
         self.current_track = None;
-        self.queue = tracks;
+        self.queue = tracks.into();
         self.queue_history.clear();
         self.sink.clear();
     }
@@ -332,7 +335,7 @@ impl Player {
     }
 
     /// Replaces the current track with the given `Track` and starts playback.
-    pub fn play_new_track(&mut self, track: Track) -> Result<(), Box<dyn Error>> {
+    pub fn play_new_track(&mut self, track: Arc<Track>) -> Result<(), Box<dyn Error>> {
         let track_attributes = track.get_attribtues()?;
         let album = track.get_album()?;
 
@@ -408,10 +411,14 @@ impl Player {
 
         // Prefetch the next track's info to reduce delay between tracks.
         if let Some(next_track) = self.queue.get(0) {
-            let _ = next_track.get_attribtues();
-            let _ = next_track.get_album();
-            let _ = next_track.get_artist();
-            let _ = next_track.get_manifest();
+            let next_track = Arc::clone(next_track);
+
+            self.tokio_rt.spawn_blocking(move || {
+                let _ = next_track.get_attribtues();
+                let _ = next_track.get_album();
+                let _ = next_track.get_artist();
+                let _ = next_track.get_manifest();
+            });
         }
 
         Ok(())

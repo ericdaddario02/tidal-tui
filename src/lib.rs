@@ -494,11 +494,11 @@ impl App {
 
     /// Starts playing the collection's tracks from the beginning.
     fn play_all(&mut self) -> Result<(), Box<dyn Error>> {
-        let collection_tracks_copy = self.user.get_collection_tracks()?.clone();
+        let collection_tracks_copy = self.collection_tracks.lock().unwrap().clone();
 
         let mut unlocked_player = self.player.lock()
             .map_err(|e| format!("{e:#?}"))?;
-        unlocked_player.set_queue(collection_tracks_copy.into());
+        unlocked_player.set_queue(collection_tracks_copy);
         drop(unlocked_player);
 
         let player_clone = Arc::clone(&self.player);
@@ -514,11 +514,11 @@ impl App {
 
     /// Starts playing the collection's tracks in a shuffled order.
     fn shuffle_all(&mut self) -> Result<(), Box<dyn Error>> {
-        let collection_tracks_copy = self.user.get_collection_tracks()?.clone();
+        let collection_tracks_copy = self.collection_tracks.lock().unwrap().clone();
 
         let mut unlocked_player = self.player.lock()
             .map_err(|e| format!("{e:#?}"))?;
-        unlocked_player.set_queue(collection_tracks_copy.into());
+        unlocked_player.set_queue(collection_tracks_copy);
         unlocked_player.shuffle_queue();
         drop(unlocked_player);
 
