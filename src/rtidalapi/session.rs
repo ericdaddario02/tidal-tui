@@ -1,10 +1,17 @@
 use std::{
-    
     fs,
-    path::Path,
+    path::{
+        Path,
+        PathBuf,
+    },
     sync::Mutex,
 };
 
+use base64::{
+    engine::general_purpose::STANDARD as BASE64, 
+    Engine as _
+};
+use chrono::Utc;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JSONValue;
@@ -32,31 +39,24 @@ mod official_only_imports {
 #[cfg(not(feature = "unofficial"))]
 use official_only_imports::*;
 
-#[cfg(feature = "unofficial")]
-mod unofficial_only_imports {
-    pub use base64::{
-        engine::general_purpose::STANDARD as BASE64, 
-        Engine as _
-    };
-}
-
-#[cfg(feature = "unofficial")]
-use unofficial_only_imports::*;
-
 use super::AudioQuality;
 
 /// Struct used to persist session info.
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct SessionInfo {
     access_token: String,
     refresh_token: String,
+    expires_at: i64,
 }
 
 /// A currently logged in Tidal session.
 #[derive(Debug)]
 pub struct Session {
-    access_token: String,
+    session_info: Mutex<SessionInfo>,
+    client_id: String,
+    client_secret: String,
     country_code: String,
+    session_file: PathBuf,
     request_client: Client,
     audio_quality: Mutex<AudioQuality>,
 }
@@ -80,35 +80,113 @@ impl Session {
 
         fs::create_dir_all(session_folder_path)
             .map_err(|e| format!("{e}"))?;
+        
+        let mut session_file = Path::new(session_folder_path).to_path_buf();
 
         #[cfg(not(feature = "unofficial"))]
-        let (access_token, country_code) = {
-            let session_file = Path::new(session_folder_path).join("tidal-session.toml");
-            
-            let access_token = Self::get_session(&request_client, &session_file, client_id, client_secret)?;
+        let (client_id, client_secret) = (client_id.to_owned(), client_secret.to_owned());
 
-            (access_token, country_code.to_string())
+        #[cfg(not(feature = "unofficial"))]
+        let (session_info, country_code) = {
+            session_file = session_file.join("tidal-session.toml");
+            
+            let session_info = Self::get_session(
+                &request_client,
+                &session_file,
+                &client_id,
+                &client_secret
+            )?;
+
+            (session_info, country_code.to_string())
         };
 
         #[cfg(feature = "unofficial")]
-        let (access_token, country_code) = {
-            let unofficial_session_file = Path::new(session_folder_path).join("unofficial-tidal-session.toml");
+        let (client_id, client_secret) = Self::get_client_id_and_secret();
 
-            let access_token = Self::get_unofficial_session(
+        #[cfg(feature = "unofficial")]
+        let (session_info, country_code) = {
+            session_file = session_file.join("unofficial-tidal-session.toml");
+
+            let session_info = Self::get_unofficial_session(
                 &request_client,
-                &unofficial_session_file,
+                &session_file,
+                &client_id,
+                &client_secret
             )?;
 
-            let country_code = Self::fetch_country_code(&request_client, &access_token)?;
+            let country_code = Self::fetch_country_code(&request_client, &session_info.access_token)?;
 
-            (access_token, country_code)
+            (session_info, country_code)
         };
 
         Ok(Self {
-            access_token,
+            session_info: Mutex::new(session_info),
+            client_id,
+            client_secret,
             country_code,
+            session_file,
             request_client,
             audio_quality: Mutex::new(AudioQuality::Max),
+        })
+    }
+
+    /// Checks if this `Session`'s current access token is expired,
+    /// refreshes it if needed, and returns a valid access token.
+    pub fn refresh_if_needed(&self) -> Result<String, String> {
+        let mut session_info = self.session_info.lock().unwrap();
+
+        if session_info.expires_at <= Utc::now().timestamp() {
+            let new_session_info = Self::refresh_access_token(
+                &self.request_client, 
+                &session_info.refresh_token, 
+                &self.client_id, 
+                &self.client_secret
+            )?;
+
+            *session_info = new_session_info;
+
+            let toml_str = toml::to_string(&(*session_info))
+                .map_err(|e| format!("{e}"))?;
+            fs::write(&self.session_file, toml_str)
+                .map_err(|e| format!("{e}"))?;
+        }
+
+        Ok(session_info.access_token.clone())
+    }
+
+    /// Refreshes an access token using an existing refresh token.
+    fn refresh_access_token(request_client: &Client, refresh_token: &str, client_id: &str, client_secret: &str) -> Result<SessionInfo, String> {
+        let basic_auth = BASE64.encode(format!("{}:{}", client_id, client_secret));
+
+        let res = request_client
+            .post(Self::TOKEN_URL)
+            .header("Authorization", format!("Basic {}", basic_auth))
+            .form(&[
+                ("client_id", client_id),
+                ("refresh_token", refresh_token),
+                ("grant_type", "refresh_token"),
+            ])
+            .send()
+            .map_err(|e| format!("Token refresh request failed: {}", e))?;
+
+        let json: JSONValue = res.json()
+            .map_err(|e| format!("Failed to parse token refresh response: {}", e))?;
+
+        if let Some(error) = json["error"].as_str() {
+            return Err(format!("Token refresh error: {}", error));
+        }
+
+        let access_token = json["access_token"].as_str()
+            .ok_or("No access_token in refresh response")?
+            .to_string();
+        let expires_in = json["expires_in"].as_i64()
+                .ok_or("No expires_in in token reponse")?;
+        let expires_at = Utc::now().timestamp() + expires_in;
+
+        Ok(SessionInfo {
+            access_token,
+            refresh_token: refresh_token.to_string(),
+            expires_at,
         })
     }
 
@@ -119,8 +197,11 @@ impl Session {
         } else {
             format!("{}{}?countryCode={}", Self::BASE_URL, endpoint, self.country_code)
         };
+
+        let access_token = self.refresh_if_needed()?;
+
         let res = self.request_client.get(url)
-            .bearer_auth(&self.access_token)
+            .bearer_auth(&access_token)
             .send()
             .map_err(|e| format!("Unable to send GET request to {}: {}", endpoint, e.to_string()))?;
 
@@ -153,7 +234,7 @@ impl Session {
     const AUTH_URL: &str = "https://login.tidal.com/authorize";
 
     /// Restores or creates a new (OAuth2 PKCE) session and returns the access token.
-    fn get_session(request_client: &Client, session_file: &Path, client_id: &str, client_secret: &str) -> Result<String, String> {
+    fn get_session(request_client: &Client, session_file: &Path, client_id: &str, client_secret: &str) -> Result<SessionInfo, String> {
         // Try to restore from file if it exists.
         if session_file.exists() {
             let toml_str = fs::read_to_string(session_file)
@@ -161,14 +242,14 @@ impl Session {
 
             if let Ok(existing) = toml::from_str::<SessionInfo>(&toml_str) {
                 // Get new access token from existing refresh token.
-                match Self::refresh_access_token(request_client, &existing.refresh_token, client_id) {
-                    Ok(refreshed) => {
-                        let toml_str = toml::to_string(&refreshed)
+                match Self::refresh_access_token(request_client, &existing.refresh_token, client_id, client_secret) {
+                    Ok(session_info) => {
+                        let toml_str = toml::to_string(&session_info)
                             .map_err(|e| format!("{e}"))?;
                         fs::write(session_file, toml_str)
                             .map_err(|e| format!("{e}"))?;
 
-                        return Ok(refreshed.access_token);
+                        return Ok(session_info);
                     },
                     Err(e) => {
                         eprintln!("Failed to refresh access token, performing new login: {}", e);
@@ -186,7 +267,7 @@ impl Session {
         fs::write(session_file, toml_str)
             .map_err(|e| format!("{e}"))?;
 
-        Ok(new_session.access_token)
+        Ok(new_session)
     }
 
     /// Performs the OAuth2 PKCE Tidal login sequence.
@@ -251,46 +332,20 @@ impl Session {
             .build()
             .expect("Client should build");
 
-        let token_result = 
-            client
-                .exchange_code(received_code)
-                .set_pkce_verifier(pkce_verifier)
-                .request(&http_client)?;
+        let token_result = client
+            .exchange_code(received_code)
+            .set_pkce_verifier(pkce_verifier)
+            .request(&http_client)?;
 
         let access_token = token_result.access_token().secret().to_string();
-        let refresh_token = token_result.refresh_token().ok_or("No refresh token")?.secret().to_string();
+        let refresh_token = token_result.refresh_token().ok_or("No refresh_token")?.secret().to_string();
+        let expires_in = token_result.expires_in().ok_or("No expires_in")?.as_secs() as i64;
+        let expires_at = Utc::now().timestamp() + expires_in;
         
         Ok(SessionInfo {
             access_token,
             refresh_token,
-        })
-    }
-
-    /// Refreshes an access token using an existing refresh token.
-    fn refresh_access_token(request_client: &Client, refresh_token: &str, client_id: &str) -> Result<SessionInfo, String> {
-        let res = request_client.post(Self::TOKEN_URL)
-            .form(&[
-                ("grant_type", "refresh_token"),
-                ("refresh_token", &refresh_token),
-                ("client_id", &client_id),
-            ])
-            .send()
-            .map_err(|e| format!("Unable to get new access token with refresh token: {}", e.to_string()))?;
-
-        let json: JSONValue = res.json()
-            .map_err(|e| format!("Unable to parse API response into JSON: {}", e.to_string()))?;
-
-        if let Some(error) = json["error"].as_str() {
-            return Err(format!("Token refresh error: {}", error));
-        }
-
-        let new_access_token = json["access_token"].as_str()
-            .ok_or("Failed to get access token")?
-            .to_string();
-
-        Ok(SessionInfo {
-            access_token: new_access_token,
-            refresh_token: refresh_token.to_string(),
+            expires_at,
         })
     }
 }
@@ -304,7 +359,7 @@ impl Session {
     const DEVICE_AUTH_URL: &str   = "https://auth.tidal.com/v1/oauth2/device_authorization";
 
     /// Restores or creates a new unofficial (device auth) session and returns the access token.
-    fn get_unofficial_session(request_client: &Client, session_file: &Path) -> Result<String, String> {
+    fn get_unofficial_session(request_client: &Client, session_file: &Path, client_id: &str, client_secret: &str) -> Result<SessionInfo, String> {
         // Try to restore from file if it exists.
         if session_file.exists() {
             let toml_str = fs::read_to_string(session_file)
@@ -312,14 +367,14 @@ impl Session {
 
             if let Ok(existing) = toml::from_str::<SessionInfo>(&toml_str) {
                 // Get new access token from existing refresh token.
-                match Self::refresh_unofficial_access_token(request_client, &existing.refresh_token) {
-                    Ok(refreshed) => {
-                        let toml_str = toml::to_string(&refreshed)
+                match Self::refresh_access_token(request_client, &existing.refresh_token, client_id, client_secret) {
+                    Ok(session_info) => {
+                        let toml_str = toml::to_string(&session_info)
                             .map_err(|e| format!("{e}"))?;
                         fs::write(session_file, toml_str)
                             .map_err(|e| format!("{e}"))?;
 
-                        return Ok(refreshed.access_token);
+                        return Ok(session_info);
                     },
                     Err(e) => {
                         eprintln!("Failed to refresh unofficial token, performing new login: {}", e);
@@ -336,7 +391,7 @@ impl Session {
         fs::write(session_file, toml_str)
             .map_err(|e| format!("{e}"))?;
 
-        Ok(new_session.access_token)
+        Ok(new_session)
     }
 
     /// Returns `(client_id, client_secret)` to be used for unofficial API auth.
@@ -444,49 +499,16 @@ impl Session {
             let refresh_token = poll_json["refresh_token"].as_str()
                 .ok_or("No refresh_token in token response")?
                 .to_string();
+            let expires_in = poll_json["expires_in"].as_i64()
+                .ok_or("No expires_in in token reponse")?;
+            let expires_at = Utc::now().timestamp() + expires_in; 
 
             return Ok(SessionInfo {
                 access_token,
                 refresh_token,
+                expires_at,
             });
         }
-    }
-
-    /// Refreshes an unofficial access token using an existing refresh token.
-    fn refresh_unofficial_access_token(request_client: &Client, refresh_token: &str) -> Result<SessionInfo, String> {
-        let (client_id, client_secret) = Self::get_client_id_and_secret();
-        let basic_auth = BASE64.encode(format!("{}:{}", client_id, client_secret));
-
-        let res = request_client
-            .post(Self::TOKEN_URL)
-            .header("Authorization", format!("Basic {}", basic_auth))
-            .form(&[
-                ("client_id", client_id.as_str()),
-                ("refresh_token", refresh_token),
-                ("grant_type", "refresh_token"),
-                ("scope", "r_usr w_usr w_sub"),
-            ])
-            .send()
-            .map_err(|e| format!("Token refresh request failed: {}", e))?;
-
-        let json: JSONValue = res.json()
-            .map_err(|e| format!("Failed to parse token refresh response: {}", e))?;
-
-        if let Some(error) = json["error"].as_str() {
-            return Err(format!("Token refresh error: {}", error));
-        }
-
-        let access_token = json["access_token"].as_str()
-            .ok_or("No access_token in refresh response")?
-            .to_string();
-        let new_refresh_token = json["refresh_token"].as_str()
-            .unwrap_or(refresh_token)
-            .to_string();
-
-        Ok(SessionInfo {
-            access_token,
-            refresh_token: new_refresh_token,
-        })
     }
 
     /// Fetches the country code for the currently logged in user from the unofficial API.
@@ -513,8 +535,10 @@ impl Session {
             format!("{}{}?countryCode={}", Self::UNOFFICIAL_BASE_URL, endpoint, self.country_code)
         };
 
+        let access_token = self.refresh_if_needed()?;
+
         let res = self.request_client.get(url)
-            .bearer_auth(&self.access_token)
+            .bearer_auth(&access_token)
             .send()
             .map_err(|e| format!("Unable to send (unofficial) GET request to {}: {}", endpoint, e.to_string()))?;
 
