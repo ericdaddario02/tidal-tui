@@ -81,43 +81,26 @@ impl Session {
         fs::create_dir_all(session_folder_path)
             .map_err(|e| format!("{e}"))?;
         
-        let mut session_file = Path::new(session_folder_path).to_path_buf();
+        let session_file = Path::new(session_folder_path).join("tidal-session.toml");
 
         #[cfg(not(feature = "unofficial"))]
         let (client_id, client_secret) = (client_id.to_owned(), client_secret.to_owned());
 
-        #[cfg(not(feature = "unofficial"))]
-        let (session_info, country_code) = {
-            session_file = session_file.join("tidal-session.toml");
+        #[cfg(feature = "unofficial")]
+        let (client_id, client_secret) = Self::get_unofficial_client_id_and_secret();
             
-            let session_info = Self::get_session(
-                &request_client,
-                &session_file,
-                &client_id,
-                &client_secret
-            )?;
+        let session_info = Self::get_session(
+            &request_client,
+            &session_file,
+            &client_id,
+            &client_secret
+        )?;
 
-            (session_info, country_code.to_string())
-        };
-
-        #[cfg(feature = "unofficial")]
-        let (client_id, client_secret) = Self::get_client_id_and_secret();
+        #[cfg(not(feature = "unofficial"))]
+        let country_code = country_code.to_string();
 
         #[cfg(feature = "unofficial")]
-        let (session_info, country_code) = {
-            session_file = session_file.join("unofficial-tidal-session.toml");
-
-            let session_info = Self::get_unofficial_session(
-                &request_client,
-                &session_file,
-                &client_id,
-                &client_secret
-            )?;
-
-            let country_code = Self::fetch_country_code(&request_client, &session_info.access_token)?;
-
-            (session_info, country_code)
-        };
+        let country_code = Self::fetch_country_code(&request_client, &session_info.access_token)?;
 
         Ok(Self {
             session_info: Mutex::new(session_info),
@@ -128,6 +111,51 @@ impl Session {
             request_client,
             audio_quality: Mutex::new(AudioQuality::Max),
         })
+    }
+
+    /// Restores or creates a new session and returns the session info.
+    /// 
+    /// If using the `unofficial` feature, a device auth session is used.
+    /// Otherwise, a PKCE OAuth2 session is used.
+    fn get_session(request_client: &Client, session_file: &Path, client_id: &str, client_secret: &str) -> Result<SessionInfo, String> {
+        // Try to restore from file if it exists.
+        if session_file.exists() {
+            let toml_str = fs::read_to_string(session_file)
+                .map_err(|e| format!("{e}"))?;
+
+            if let Ok(existing) = toml::from_str::<SessionInfo>(&toml_str) {
+                // Get new access token from existing refresh token.
+                match Self::refresh_access_token(request_client, &existing.refresh_token, client_id, client_secret) {
+                    Ok(session_info) => {
+                        let toml_str = toml::to_string(&session_info)
+                            .map_err(|e| format!("{e}"))?;
+                        fs::write(session_file, toml_str)
+                            .map_err(|e| format!("{e}"))?;
+
+                        return Ok(session_info);
+                    },
+                    Err(e) => {
+                        eprintln!("Failed to refresh access token, performing new login: {}", e);
+                    },
+                }
+            }
+        }
+
+        #[cfg(not(feature = "unofficial"))]
+        // No valid session — perform new PKCE login.
+        let new_session = Self::new_ouath_pkce_login(client_id, client_secret)
+            .map_err(|e| format!("{e}"))?;
+
+        #[cfg(feature = "unofficial")]
+        // No valid session — perform new device auth login.
+        let new_session = Self::new_device_auth_login(request_client, client_id, client_secret)?;
+
+        let toml_str = toml::to_string(&new_session)
+            .map_err(|e| format!("{e}"))?;
+        fs::write(session_file, toml_str)
+            .map_err(|e| format!("{e}"))?;
+
+        Ok(new_session)
     }
 
     /// Checks if this `Session`'s current access token is expired,
@@ -233,43 +261,6 @@ impl Session {
     /// URL for the OAuth2 PKCE auth endpoint.
     const AUTH_URL: &str = "https://login.tidal.com/authorize";
 
-    /// Restores or creates a new (OAuth2 PKCE) session and returns the access token.
-    fn get_session(request_client: &Client, session_file: &Path, client_id: &str, client_secret: &str) -> Result<SessionInfo, String> {
-        // Try to restore from file if it exists.
-        if session_file.exists() {
-            let toml_str = fs::read_to_string(session_file)
-                .map_err(|e| format!("{e}"))?;
-
-            if let Ok(existing) = toml::from_str::<SessionInfo>(&toml_str) {
-                // Get new access token from existing refresh token.
-                match Self::refresh_access_token(request_client, &existing.refresh_token, client_id, client_secret) {
-                    Ok(session_info) => {
-                        let toml_str = toml::to_string(&session_info)
-                            .map_err(|e| format!("{e}"))?;
-                        fs::write(session_file, toml_str)
-                            .map_err(|e| format!("{e}"))?;
-
-                        return Ok(session_info);
-                    },
-                    Err(e) => {
-                        eprintln!("Failed to refresh access token, performing new login: {}", e);
-                    },
-                }
-            }
-        }
-
-        // No valid session — perform new PKCE login.
-        let new_session = Self::new_ouath_pkce_login(client_id, client_secret)
-            .map_err(|e| format!("{e}"))?;
-
-        let toml_str = toml::to_string(&new_session)
-            .map_err(|e| format!("{e}"))?;
-        fs::write(session_file, toml_str)
-            .map_err(|e| format!("{e}"))?;
-
-        Ok(new_session)
-    }
-
     /// Performs the OAuth2 PKCE Tidal login sequence.
     fn new_ouath_pkce_login(client_id: &str, client_secret: &str) -> Result<SessionInfo, Box<dyn Error>> {
         // Create an OAuth2 client.
@@ -358,46 +349,10 @@ impl Session {
     /// URL for the unofficial Tidal API device auth.
     const DEVICE_AUTH_URL: &str   = "https://auth.tidal.com/v1/oauth2/device_authorization";
 
-    /// Restores or creates a new unofficial (device auth) session and returns the access token.
-    fn get_unofficial_session(request_client: &Client, session_file: &Path, client_id: &str, client_secret: &str) -> Result<SessionInfo, String> {
-        // Try to restore from file if it exists.
-        if session_file.exists() {
-            let toml_str = fs::read_to_string(session_file)
-                .map_err(|e| format!("{e}"))?;
-
-            if let Ok(existing) = toml::from_str::<SessionInfo>(&toml_str) {
-                // Get new access token from existing refresh token.
-                match Self::refresh_access_token(request_client, &existing.refresh_token, client_id, client_secret) {
-                    Ok(session_info) => {
-                        let toml_str = toml::to_string(&session_info)
-                            .map_err(|e| format!("{e}"))?;
-                        fs::write(session_file, toml_str)
-                            .map_err(|e| format!("{e}"))?;
-
-                        return Ok(session_info);
-                    },
-                    Err(e) => {
-                        eprintln!("Failed to refresh unofficial token, performing new login: {}", e);
-                    },
-                }
-            }
-        }
-
-        // No valid session — perform new device auth login.
-        let new_session = Self::new_device_auth_login(request_client)?;
-
-        let toml_str = toml::to_string(&new_session)
-            .map_err(|e| format!("{e}"))?;
-        fs::write(session_file, toml_str)
-            .map_err(|e| format!("{e}"))?;
-
-        Ok(new_session)
-    }
-
     /// Returns `(client_id, client_secret)` to be used for unofficial API auth.
     /// 
     /// The client_id and client_secret values were taken from https://github.com/EbbLabs/python-tidal/blob/main/tidalapi/session.py.
-    fn get_client_id_and_secret() -> (String, String) {
+    fn get_unofficial_client_id_and_secret() -> (String, String) {
         let id_part1 = BASE64.decode(b"WmxneVNuaGtiVzUw").unwrap();
         let id_part2 = BASE64.decode(b"V2xkTE1HbDRWQT09").unwrap();
         
@@ -418,15 +373,14 @@ impl Session {
     }
 
     /// Performs the device authorization login flow using the unofficial Tidal client credentials.
-    fn new_device_auth_login(request_client: &Client) -> Result<SessionInfo, String> {
-        let (client_id, client_secret) = Self::get_client_id_and_secret();
+    fn new_device_auth_login(request_client: &Client, client_id: &str, client_secret: &str) -> Result<SessionInfo, String> {
         let basic_auth = BASE64.encode(format!("{}:{}", client_id, client_secret));
 
         let res = request_client
             .post(Self::DEVICE_AUTH_URL)
             .header("Authorization", format!("Basic {}", basic_auth))
             .form(&[
-                ("client_id", client_id.as_str()),
+                ("client_id", client_id),
                 ("scope", "r_usr w_usr w_sub")
             ])
             .send()
@@ -474,7 +428,7 @@ impl Session {
                 .post(Self::TOKEN_URL)
                 .header("Authorization", format!("Basic {}", basic_auth))
                 .form(&[
-                    ("client_id", client_id.as_str()),
+                    ("client_id", client_id),
                     ("device_code", &device_code),
                     ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
                     ("scope", "r_usr w_usr w_sub"),
