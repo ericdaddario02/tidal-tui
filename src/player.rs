@@ -37,7 +37,10 @@ use stream_download::{
     Settings,
     StreamDownload
 };
-use tokio::io::AsyncWriteExt;
+use tokio::{
+    io::AsyncWriteExt,
+    task::JoinHandle,
+};
 
 use crate::{
     rtidalapi::Track,
@@ -86,6 +89,7 @@ pub struct Player {
     is_playing: bool,
     volume: u32,
     normalization_mode: NormalizationMode,
+    track_fetch_task_handle: Option<JoinHandle<()>>,
 
     // Information about the current track.
     replay_gain: f32,
@@ -147,6 +151,7 @@ impl Player {
             is_playing: false,
             volume: 50,
             normalization_mode: NormalizationMode::Track,
+            track_fetch_task_handle: None,
 
             replay_gain: 0.0,
             parsed_manifest: None,
@@ -348,6 +353,9 @@ impl Player {
         let duration = track.get_duration()?.clone();
         let cover_url = &album.cover_art_url;
 
+        if let Some(handle) = self.track_fetch_task_handle.take() {
+            handle.abort();
+        }
         self.sink.clear();
 
         if self.output_stream.config().sample_rate().get() != parsed_manifest.sample_rate {
@@ -375,7 +383,7 @@ impl Player {
         let client = self.async_request_client.clone();
         let urls = parsed_manifest.urls.clone();
 
-        self.tokio_rt.spawn(async move {
+        let handle = self.tokio_rt.spawn(async move {
             for url in urls {
                 match client.get(&url).send().await {
                     Ok(resp) => {
@@ -391,6 +399,7 @@ impl Player {
                 }
             }
         });
+        self.track_fetch_task_handle = Some(handle);
 
         let stream = self.tokio_rt.block_on(async {
             StreamDownload::from_stream(
