@@ -78,7 +78,6 @@ pub struct ParsedManifest {
 pub struct Player {
     output_stream: MixerDeviceSinkWrapper,
     sink: RodioPlayer,
-    request_client: reqwest::blocking::Client,
     async_request_client: reqwest::Client,
     tokio_rt: tokio::runtime::Runtime,
     controls: MediaControls,
@@ -140,7 +139,6 @@ impl Player {
         Ok(Self {
             output_stream: MixerDeviceSinkWrapper(output_stream),
             sink,
-            request_client: reqwest::blocking::Client::new(),
             async_request_client: reqwest::Client::new(),
             tokio_rt,
             controls,
@@ -345,7 +343,7 @@ impl Player {
         let album = track.get_album()?;
 
         let manifest = track.get_manifest()?;
-        let parsed_manifest = self.parse_manifest(&manifest.uri)?;
+        let parsed_manifest = Self::parse_manifest(&manifest.uri)?;
 
         let track_title = &track_attributes.title;
         let album_title = &album.attributes.title;
@@ -434,8 +432,7 @@ impl Player {
     }
 
     /// Parses an MPEG DASH manifest and returns the urls and audio file information (codec, sample rate, bit depth).
-    pub fn parse_manifest(&self, manifest_url: &str) -> Result<ParsedManifest, Box<dyn Error>> {
-        let xml = self.request_client.get(manifest_url).send()?.text()?;
+    pub fn parse_manifest(xml: &str) -> Result<ParsedManifest, Box<dyn Error>> {
         let xml = regex::Regex::new(r#" group="[^"]*""#)?.replace_all(&xml, "").to_string();
         let mpd: MPD = parse(&xml)?;
 
@@ -461,7 +458,6 @@ impl Player {
         let codec = rep.codecs.as_deref().unwrap_or("").to_string();
         let bandwidth = rep.bandwidth.unwrap_or(0);
         let start_number = seg_template.startNumber.unwrap_or(1) as u64;
-        let base = manifest_url.rsplitn(2, '/').last().unwrap_or(manifest_url);
 
         let mut rep_id_split = rep_id.split(',');
 
@@ -475,12 +471,11 @@ impl Player {
         let content_length = ((duration_secs * (bandwidth as f64)) / 8.0) as u64;
 
         let resolve = |template: &str, number: u64, time: u64| -> String {
-            let s = template
+            template
                 .replace("$RepresentationID$", rep_id)
                 .replace("$Number$", &number.to_string())
                 .replace("$Time$", &time.to_string())
-                .replace("$Bandwidth$", &bandwidth.to_string());
-            if s.starts_with("http") { s } else { format!("{base}/{s}") }
+                .replace("$Bandwidth$", &bandwidth.to_string())
         };
 
         let init_url = seg_template.initialization.as_deref()

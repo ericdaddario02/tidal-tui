@@ -7,6 +7,10 @@ use std::{
     time::Duration
 };
 
+use base64::{
+    engine::general_purpose::STANDARD as BASE64, 
+    Engine as _
+};
 use chrono::Utc;
 use once_cell::sync::OnceCell;
 use regex::Regex;
@@ -173,7 +177,7 @@ impl Track {
 
         if is_missing || is_stale {
             let mut endpoint = format!(
-                "/trackManifests/{}?manifestType=MPEG_DASH&uriScheme=HTTPS&usage=PLAYBACK&adaptive=false",
+                "/trackManifests/{}?manifestType=MPEG_DASH&uriScheme=DATA&usage=PLAYBACK&adaptive=false",
                 self.id
             );
 
@@ -193,8 +197,15 @@ impl Track {
             let mut data_json = self.session.get(&endpoint)?["data"].take();
             let attributes_json = data_json["attributes"].take();
 
-            let manifest: TrackManifest = serde_json::from_value(attributes_json)
+            let mut manifest: TrackManifest = serde_json::from_value(attributes_json)
                 .map_err(|e| format!("Unable to parse track manifest API response: {}", e.to_string()))?;
+
+            let (_, encoded_xml) = manifest.uri.split_once(",")
+                .ok_or("Unable to parse manifest XML")?;
+            let decoded_xml = BASE64.decode(encoded_xml)
+                .map_err(|e| format!("Unable to parse manifest XML: {}", e.to_string()))?;
+            manifest.uri = String::from_utf8(decoded_xml)
+                .map_err(|e| format!("Unable to parse manifest XML: {}", e.to_string()))?;
             
             let expires_at: i64 = manifest.uri
                 .split("token=")
