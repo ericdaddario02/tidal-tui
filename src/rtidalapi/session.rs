@@ -220,6 +220,11 @@ impl Session {
 
     /// Makes a GET request to the Tidal API.
     pub(super) fn get(&self, endpoint: &str) -> Result<JSONValue, String> {
+        self.get_with_headers(endpoint, vec![])
+    }
+
+    /// Makes a GET request with headers to the Tidal API.
+    pub(super) fn get_with_headers(&self, endpoint: &str, headers: Vec<(&str, &str)>) -> Result<JSONValue, String> {
         let url = if endpoint.contains("?") {
             format!("{}{}&countryCode={}", Self::BASE_URL, endpoint, self.country_code)
         } else {
@@ -228,9 +233,14 @@ impl Session {
 
         let access_token = self.refresh_if_needed()?;
 
-        let res = self.request_client.get(url)
-            .bearer_auth(&access_token)
-            .send()
+        let mut req = self.request_client.get(url)
+            .bearer_auth(&access_token);
+
+        for (key, val) in headers {
+            req = req.header(key, val);
+        }
+
+        let res = req.send()
             .map_err(|e| format!("Unable to send GET request to {}: {}", endpoint, e.to_string()))?;
 
         if !res.status().is_success() {

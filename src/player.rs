@@ -81,16 +81,18 @@ pub struct Player {
     async_request_client: reqwest::Client,
     tokio_rt: tokio::runtime::Runtime,
     controls: MediaControls,
+
+    // Player state
     current_track: Option<Arc<Track>>,
     queue: VecDeque<Arc<Track>>,
     queue_history: VecDeque<Arc<Track>>,
-    position: Duration,
     is_playing: bool,
     volume: u32,
     normalization_mode: NormalizationMode,
     track_fetch_task_handle: Option<JoinHandle<()>>,
 
     // Information about the current track.
+    position: Duration,
     replay_gain: f32,
     parsed_manifest: Option<ParsedManifest>,
 
@@ -142,15 +144,16 @@ impl Player {
             async_request_client: reqwest::Client::new(),
             tokio_rt,
             controls,
+
             current_track: None,
             queue: VecDeque::new(),
             queue_history: VecDeque::new(),
-            position: Duration::from_secs(0),
             is_playing: false,
             volume: 50,
             normalization_mode: NormalizationMode::Track,
             track_fetch_task_handle: None,
 
+            position: Duration::from_secs(0),
             replay_gain: 0.0,
             parsed_manifest: None,
 
@@ -432,7 +435,7 @@ impl Player {
     }
 
     /// Parses an MPEG DASH manifest and returns the urls and audio file information (codec, sample rate, bit depth).
-    pub fn parse_manifest(xml: &str) -> Result<ParsedManifest, Box<dyn Error>> {
+    fn parse_manifest(xml: &str) -> Result<ParsedManifest, Box<dyn Error>> {
         let xml = regex::Regex::new(r#" group="[^"]*""#)?.replace_all(&xml, "").to_string();
         let mpd: MPD = parse(&xml)?;
 

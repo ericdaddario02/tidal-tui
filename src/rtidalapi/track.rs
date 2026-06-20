@@ -16,6 +16,7 @@ use once_cell::sync::OnceCell;
 use regex::Regex;
 use serde::{Deserialize};
 use serde_json;
+use uuid::Uuid;
 
 use super::Album;
 use super::Artist;
@@ -194,7 +195,14 @@ impl Track {
                 endpoint.push_str("&formats=FLAC_HIRES");
             }
 
-            let mut data_json = self.session.get(&endpoint)?["data"].take();
+            let playback_session_id = Uuid::new_v4().to_string();
+
+            let headers = vec![
+                ("x-playback-session-id", playback_session_id.as_str())
+            ];
+
+            let mut data_json = self.session.get_with_headers(&endpoint, headers)?
+                ["data"].take();
             let attributes_json = data_json["attributes"].take();
 
             let mut manifest: TrackManifest = serde_json::from_value(attributes_json)
