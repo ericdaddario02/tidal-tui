@@ -77,6 +77,10 @@ pub struct TrackManifest {
     pub track_audio_normalization_data: NormalizationData,
     pub track_presentation: String,
     pub uri: String,
+
+    /// A UUID generated when fetching the manifest for use with `PlayLog` event logging.
+    #[serde(default)]
+    pub playback_session_id: String,
 }
 
 /// Wrapper used for `TrackManifest` caching.
@@ -214,6 +218,8 @@ impl Track {
                 .map_err(|e| format!("Unable to parse manifest XML: {}", e.to_string()))?;
             manifest.uri = String::from_utf8(decoded_xml)
                 .map_err(|e| format!("Unable to parse manifest XML: {}", e.to_string()))?;
+            
+            manifest.playback_session_id = playback_session_id;
             
             let expires_at: i64 = manifest.uri
                 .split("token=")

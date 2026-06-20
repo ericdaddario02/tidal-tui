@@ -38,6 +38,7 @@ mod official_only_imports {
 
 #[cfg(not(feature = "unofficial"))]
 use official_only_imports::*;
+use uuid::Uuid;
 
 use super::AudioQuality;
 
@@ -67,6 +68,9 @@ impl Session {
 
     /// URL for the token endpoint.
     const TOKEN_URL: &str = "https://auth.tidal.com/v1/oauth2/token";
+
+    /// URL for the events endpoint.
+    const EVENTS_URL: &str = "https://ec.tidal.com/api/event-batch";
 
     /// Returns a new logged in `Session`.
     /// 
@@ -250,6 +254,46 @@ impl Session {
         let json: JSONValue = res.json()
             .map_err(|e| format!("Unable to parse API response into JSON: {}", e.to_string()))?;
         Ok(json)
+    }
+
+    /// Sends an event to Tidal.
+    pub(super) fn send_event(&self, event: JSONValue) -> Result<(), String> {
+        let access_token = self.refresh_if_needed()?;
+
+        let event_id = event["uuid"]
+            .as_str()
+            .map(String::from)
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let event_name = event["name"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+
+        let event_str = serde_json::to_string(&event)
+            .map_err(|e| format!("Failed to send event: {}", e.to_string()))?;
+
+        let params = vec![
+            ("SendMessageBatchRequestEntry.1.Id", event_id),
+            ("SendMessageBatchRequestEntry.1.MessageBody", event_str),
+            ("SendMessageBatchRequestEntry.1.MessageAttribute.1.Name", "Name".to_string()),
+            ("SendMessageBatchRequestEntry.1.MessageAttribute.1.Value.StringValue", event_name),
+            ("SendMessageBatchRequestEntry.1.MessageAttribute.1.Value.DataType", "String".to_string()),
+        ];
+
+        let res = self.request_client.post(Self::EVENTS_URL)
+            .bearer_auth(&access_token)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .form(&params)
+            .send()
+            .map_err(|e| format!("Failed to send event: {}", e.to_string()))?;
+
+        if !res.status().is_success() {
+            let status = res.status();
+            let body = res.text().unwrap_or_default();
+            return Err(format!("Failed to send event: {} - {}", status, body));
+        }
+
+        Ok(())
     }
 
     // TODO: remove mutex

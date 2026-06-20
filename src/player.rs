@@ -43,7 +43,12 @@ use tokio::{
 };
 
 use crate::{
-    rtidalapi::Track,
+    rtidalapi::{
+        AudioQuality,
+        PlayLog,
+        Session,
+        Track,
+    },
     AppEvent,
 };
 
@@ -71,6 +76,7 @@ pub struct ParsedManifest {
     pub codec: String,
     pub sample_rate: u32,
     pub bit_depth: u32,
+    pub bit_rate: u64,
     pub content_length: u64,
 }
 
@@ -81,6 +87,7 @@ pub struct Player {
     async_request_client: reqwest::Client,
     tokio_rt: tokio::runtime::Runtime,
     controls: MediaControls,
+    playlog: Arc<PlayLog>,
 
     // Player state
     current_track: Option<Arc<Track>>,
@@ -106,7 +113,7 @@ impl Player {
     const MAX_VOLUME: f32 = 0.5;
 
     /// Returns a new `Player`.
-    pub fn new() -> Result<Self, Box<dyn Error>> {
+    pub fn new(session: Arc<Session>) -> Result<Self, Box<dyn Error>> {
         let tokio_rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(4)
             .enable_all()
@@ -138,12 +145,15 @@ impl Player {
         };
         let controls = MediaControls::new(config)?;
 
+        let playlog = Arc::new(PlayLog::new(session));
+
         Ok(Self {
             output_stream: MixerDeviceSinkWrapper(output_stream),
             sink,
             async_request_client: reqwest::Client::new(),
             tokio_rt,
             controls,
+            playlog,
 
             current_track: None,
             queue: VecDeque::new(),
@@ -414,6 +424,13 @@ impl Player {
         self.sink.append(source);
         self.sink.play();
 
+        let actual_quality = Self::get_actual_quality(&parsed_manifest);
+        self.playlog.log_playback_start(
+            &manifest.playback_session_id,
+            &track.id,
+            actual_quality
+        );
+
         self.current_track = Some(track);
         self.parsed_manifest = Some(parsed_manifest);
         self.is_playing = true;
@@ -467,6 +484,7 @@ impl Player {
         let _ = rep_id_split.next().unwrap_or("");  // quality string
         let sample_rate: u32 = rep_id_split.next().unwrap_or("44100").parse()?;
         let bit_depth: u32 = rep_id_split.next().unwrap_or("16").parse()?;
+        let bit_rate = bandwidth / 1000;
 
         let duration_secs = mpd.mediaPresentationDuration
             .map(|d| d.as_secs_f64())
@@ -509,8 +527,28 @@ impl Player {
             codec,
             sample_rate,
             bit_depth,
+            bit_rate,
             content_length
         })
+    }
+
+    /// Returns the *actual* `AudioQuality` from a given `ParsedManifest`.
+    /// 
+    /// Note: The actual quality may be different than the requested quality.
+    fn get_actual_quality(parsed_manifest: &ParsedManifest) -> AudioQuality {
+        if parsed_manifest.codec == "FLAC" {
+            if parsed_manifest.bit_depth > 16 || parsed_manifest.sample_rate > 44100 {
+                AudioQuality::Max
+            } else {
+                AudioQuality::High
+            }
+        } else {
+            if parsed_manifest.bit_rate > 96 {
+                AudioQuality::Low320
+            } else {
+                AudioQuality::Low96
+            }
+        }
     }
 
     /// Resumes playback if a track is paused, or starts playing the first track in the queue (if non-empty).
@@ -541,6 +579,8 @@ impl Player {
     /// Skips to playing the next track in the queue.
     pub fn next(&mut self) -> Result<(), Box<dyn Error>> {
         if let Some(current_track) = self.current_track.take() {
+            self.send_playlog_event_if_valid();
+
             if let Some(next_track) = self.queue.pop_front() {
                 self.queue_history.push_back(current_track);
                 self.play_new_track(next_track)?;
@@ -558,6 +598,8 @@ impl Player {
     /// Goes back to play the previous track in the queue history.
     pub fn prev(&mut self) -> Result<(), Box<dyn Error>> {
         if let Some(current_track) = self.current_track.take() {
+            self.send_playlog_event_if_valid();
+
             if let Some(prev_track) = self.queue_history.pop_back() {
                 self.queue.push_front(current_track);
                 self.play_new_track(prev_track)?;
@@ -588,5 +630,19 @@ impl Player {
         }
 
         Ok(())
+    }
+
+    /// Logs and sends a `PlayLog` event if the current track was listened to for more than 30 seconds.
+    /// The event is sent asynchronously.
+    fn send_playlog_event_if_valid(&mut self) {
+        if self.position > Duration::from_secs(30) {
+            self.playlog.log_playback_end(self.position.as_secs_f64());
+
+            let playlog_clone = Arc::clone(&self.playlog);
+            self.tokio_rt.spawn_blocking(move || {
+                playlog_clone.send_playback_session()
+                    .map_err(|e| format!("Failed to log and send PlayLog event: {}", e.to_string())).unwrap();  
+            });
+        }
     }
 }

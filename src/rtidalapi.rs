@@ -36,6 +36,7 @@ impl AudioQuality {
 
 pub mod album;
 pub mod artist;
+pub mod playlog;
 pub mod session;
 pub mod track;
 pub mod user;
@@ -43,6 +44,7 @@ pub mod user;
 // Re-exports
 pub use album::Album;
 pub use artist::Artist;
+pub use playlog::PlayLog;
 pub use session::Session;
 pub use track::Track;
 pub use user::User;

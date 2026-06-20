@@ -117,7 +117,13 @@ impl App {
         let (tx, rx) = mpsc::channel::<AppEvent>(MAX_APP_EVENTS);
         let tx_clone = tx.clone();
 
-        let player = Arc::new(Mutex::new(Player::new()?));
+        let player = Arc::new(
+            Mutex::new(
+                Player::new(
+                    Arc::clone(&session)
+                )?
+            )
+        );
         Player::start_polling_thread(Arc::clone(&player), tx_clone)?;
 
         let collection_tracks_table_state = TableState::default();
