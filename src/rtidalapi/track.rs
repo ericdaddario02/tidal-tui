@@ -166,8 +166,16 @@ impl Track {
 
     /// Returns a reference to the `TrackManifest` associated with this track.
     /// 
-    /// This `TrackManifest` is then cached within `self`.
-    pub fn get_manifest(&self) -> Result<TrackManifest, String> {
+    /// If `prefetch = true`, `TrackManifest` is cached within `self`,
+    /// but Tidal will not count this request as a stream/play.
+    /// 
+    /// If `prefetch = false`, the request is not cached, and Tidal
+    /// will count it as a stream/play.
+    pub fn get_manifest(&self, prefetch: bool) -> Result<TrackManifest, String> {
+        if !prefetch {
+            return self._get_new_manifest(prefetch);
+        }
+
         let mut cached_manifest = self.cached_manifest.lock().map_err(|e| format!("{e:#?}"))?;
         let quality = self.session.get_audio_quality();
 
@@ -177,43 +185,7 @@ impl Track {
         });
 
         if is_missing || is_stale {
-            let mut endpoint = format!(
-                "/trackManifests/{}?manifestType=MPEG_DASH&uriScheme=DATA&usage=PLAYBACK&adaptive=false",
-                self.id
-            );
-
-            if quality >= AudioQuality::Low96 {
-                endpoint.push_str("&formats=HEAACV1");
-            }
-            if quality >= AudioQuality::Low320 {
-                endpoint.push_str("&formats=AACLC");
-            }
-            if quality >= AudioQuality::High {
-                endpoint.push_str("&formats=FLAC");
-            }
-            if quality >= AudioQuality::Max {
-                endpoint.push_str("&formats=FLAC_HIRES");
-            }
-
-            let playback_session_id = Uuid::new_v4().to_string();
-
-            let headers = vec![
-                ("x-playback-session-id", playback_session_id.as_str())
-            ];
-
-            let mut data_json = self.session.get_with_headers(&endpoint, headers)?
-                ["data"].take();
-            let attributes_json = data_json["attributes"].take();
-
-            let mut manifest: TrackManifest = serde_json::from_value(attributes_json)
-                .map_err(|e| format!("Unable to parse track manifest API response: {}", e.to_string()))?;
-
-            let (_, encoded_xml) = manifest.uri.split_once(",")
-                .ok_or("Unable to parse manifest XML")?;
-            let decoded_xml = BASE64.decode(encoded_xml)
-                .map_err(|e| format!("Unable to parse manifest XML: {}", e.to_string()))?;
-            manifest.uri = String::from_utf8(decoded_xml)
-                .map_err(|e| format!("Unable to parse manifest XML: {}", e.to_string()))?;
+            let manifest = self._get_new_manifest(prefetch)?;
             
             let expires_at: i64 = manifest.uri
                 .split("token=")
@@ -229,6 +201,54 @@ impl Track {
         }
 
         Ok(cached_manifest.as_ref().unwrap().manifest.clone())
+    }
+
+    fn _get_new_manifest(&self, prefetch: bool) -> Result<TrackManifest, String> {
+        let mut endpoint = format!(
+            "/trackManifests/{}?manifestType=MPEG_DASH&uriScheme=DATA&usage=PLAYBACK&adaptive=false",
+            self.id
+        );
+
+        let quality = self.session.get_audio_quality();
+
+        if quality >= AudioQuality::Low96 {
+            endpoint.push_str("&formats=HEAACV1");
+        }
+        if quality >= AudioQuality::Low320 {
+            endpoint.push_str("&formats=AACLC");
+        }
+        if quality >= AudioQuality::High {
+            endpoint.push_str("&formats=FLAC");
+        }
+        if quality >= AudioQuality::Max {
+            endpoint.push_str("&formats=FLAC_HIRES");
+        }
+
+        let mut data_json = if prefetch {
+            let playback_session_id = Uuid::new_v4().to_string();
+
+            let headers = vec![
+                ("x-playback-session-id", playback_session_id.as_str())
+            ];
+
+            self.session.get_with_headers(&endpoint, headers)?["data"].take()
+        } else {
+            self.session.get(&endpoint)?["data"].take()
+        };
+
+        let attributes_json = data_json["attributes"].take();
+
+        let mut manifest: TrackManifest = serde_json::from_value(attributes_json)
+            .map_err(|e| format!("Unable to parse track manifest API response: {}", e.to_string()))?;
+
+        let (_, encoded_xml) = manifest.uri.split_once(",")
+            .ok_or("Unable to parse manifest XML")?;
+        let decoded_xml = BASE64.decode(encoded_xml)
+            .map_err(|e| format!("Unable to parse manifest XML: {}", e.to_string()))?;
+        manifest.uri = String::from_utf8(decoded_xml)
+            .map_err(|e| format!("Unable to parse manifest XML: {}", e.to_string()))?;
+        
+        Ok(manifest)
     }
 
     /// Returns true if this Track already contains its attributes, album, and artist information.
