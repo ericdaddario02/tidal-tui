@@ -95,6 +95,7 @@ pub struct Player {
     position: Duration,
     replay_gain: f32,
     parsed_manifest: Option<ParsedManifest>,
+    has_confirmed_play: bool,
 
     #[cfg(target_os = "windows")]
     /// Keeps the hidden window alive for the lifetime of the player.
@@ -104,6 +105,10 @@ pub struct Player {
 impl Player {
     /// Set max volume for rodio because otherwise it is way too loud.
     const MAX_VOLUME: f32 = 0.5;
+
+    /// Duration of playback required before sending a play event to Tidal.
+    #[allow(unused)]
+    const VALID_PLAYBACK_SESSION_DURATION: Duration = Duration::from_secs(30);
 
     /// Returns a new `Player`.
     pub fn new() -> Result<Self, Box<dyn Error>> {
@@ -156,6 +161,7 @@ impl Player {
             position: Duration::from_secs(0),
             replay_gain: 0.0,
             parsed_manifest: None,
+            has_confirmed_play: false,
 
             #[cfg(target_os = "windows")]
             _hwnd_window: hwnd_window,
@@ -222,9 +228,24 @@ impl Player {
             loop {
                 {
                     let mut unlocked_player = player.lock().unwrap();
+
                     if unlocked_player.is_playing {
                         let position = unlocked_player.sink.get_pos();
 
+                        // If we have listened to the current track past the VALID_PLAYBACK threshold,
+                        // refetch the track's manifest with prefetch=false so Tidal will count this as a stream/play.
+                        #[cfg(not(debug_assertions))]
+                        if !unlocked_player.has_confirmed_play && position > Player::VALID_PLAYBACK_SESSION_DURATION {
+                            let current_track = Arc::clone(unlocked_player.current_track.as_ref().unwrap());
+
+                            unlocked_player.tokio_rt.spawn_blocking(move || {
+                                let _ = current_track.get_manifest(false);
+                            });
+
+                            unlocked_player.has_confirmed_play = true;
+                        }
+
+                        // Update player state.
                         if unlocked_player.sink.empty() {
                             unlocked_player.next().unwrap();
                             let _ = app_tx.try_send(AppEvent::ReRender);
@@ -238,6 +259,7 @@ impl Player {
                     }
                 }
 
+                // Handle OS media key events.
                 if let Ok(event) = rx.try_recv() {
                     let mut unlocked_player = player.lock().unwrap();
 
@@ -345,7 +367,7 @@ impl Player {
         let track_attributes = track.get_attribtues()?;
         let album = track.get_album()?;
 
-        let manifest = track.get_manifest()?;
+        let manifest = track.get_manifest(true)?;
         let parsed_manifest = Self::parse_manifest(&manifest.uri)?;
 
         let track_title = &track_attributes.title;
@@ -363,6 +385,7 @@ impl Player {
             self.open_new_output_stream(parsed_manifest.sample_rate)?;
         }
 
+        self.position = Duration::from_secs(0);
         self.replay_gain = match self.normalization_mode {
             NormalizationMode::Album => manifest.album_audio_normalization_data.replay_gain,
             NormalizationMode::Track => manifest.track_audio_normalization_data.replay_gain,
@@ -417,7 +440,6 @@ impl Player {
         self.current_track = Some(track);
         self.parsed_manifest = Some(parsed_manifest);
         self.is_playing = true;
-        self.position = Duration::from_secs(0);
 
         // Prefetch the next track's info to reduce delay between tracks.
         if let Some(next_track) = self.queue.get(0) {
@@ -427,7 +449,7 @@ impl Player {
                 let _ = next_track.get_attribtues();
                 let _ = next_track.get_album();
                 let _ = next_track.get_artist();
-                let _ = next_track.get_manifest();
+                let _ = next_track.get_manifest(true);
             });
         }
 
@@ -544,6 +566,7 @@ impl Player {
             if let Some(next_track) = self.queue.pop_front() {
                 self.queue_history.push_back(current_track);
                 self.play_new_track(next_track)?;
+                self.has_confirmed_play = false;
             } else {
                 // No next tracks. Just start the same track over again (same as Tidal).
                 self.current_track = Some(current_track);
@@ -561,6 +584,7 @@ impl Player {
             if let Some(prev_track) = self.queue_history.pop_back() {
                 self.queue.push_front(current_track);
                 self.play_new_track(prev_track)?;
+                self.has_confirmed_play = false;
             } else {
                 // No previous tracks. Just start the same track over again (same as Tidal).
                 self.current_track = Some(current_track);
