@@ -53,7 +53,6 @@ pub struct TrackAttributes {
     pub copyright: HashMap<String, String>,
     pub explicit: bool,
     pub popularity: f32,
-    pub availability: Vec<String>,
     pub media_tags: Vec<String>,
 }
 

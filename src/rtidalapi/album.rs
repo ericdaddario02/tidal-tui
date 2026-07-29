@@ -37,7 +37,6 @@ pub struct AlbumAttributes {
     pub release_date: String,
     pub copyright: HashMap<String, String>,
     pub popularity: f32,
-    pub availability: Vec<String>,
     pub media_tags: Vec<String>,
 }
 
