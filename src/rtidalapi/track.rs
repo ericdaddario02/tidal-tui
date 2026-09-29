@@ -205,16 +205,14 @@ impl Track {
                 .map_err(|e| format!("Unable to parse manifest XML: {}", e.to_string()))?;
             manifest.uri = String::from_utf8(decoded_xml)
                 .map_err(|e| format!("Unable to parse manifest XML: {}", e.to_string()))?;
-            
+
             let expires_at: i64 = manifest.uri
                 .split("token=")
                 .nth(1)
-                .ok_or("Manifest URI has no expires_at")?
-                .split('~')
-                .next()
-                .ok_or("Manifest URI has no expires_at")?
-                .parse::<i64>()
-                .map_err(|e| format!("Unable to parse track manifest expires_at: {}", e.to_string()))?;
+                .and_then(|s| s.split('~').next())
+                .and_then(|s| s.parse().ok())
+                .unwrap_or_else(|| (chrono::Utc::now() + chrono::Duration::minutes(30)).timestamp());
+            // TODO: investigate why we no longer get expires_at in the manifest URI
 
             *cached_manifest = Some(CachedTrackManifest { manifest, quality, expires_at });
         }

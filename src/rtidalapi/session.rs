@@ -96,6 +96,26 @@ impl Session {
             &client_secret
         )?;
 
+        #[cfg(feature = "unofficial")]
+        let (client_id, client_secret, session_info) = {
+            let (request_client_id, request_client_secret) = Self::get_unofficial_request_client_id_and_secret();
+
+            match Self::refresh_access_token(&request_client, &session_info.refresh_token, &request_client_id, &request_client_secret) {
+                Ok(switched_session_info) => {
+                    let toml_str = toml::to_string(&switched_session_info)
+                        .map_err(|e| format!("{e}"))?;
+                    fs::write(&session_file, toml_str)
+                        .map_err(|e| format!("{e}"))?;
+
+                    (request_client_id, request_client_secret, switched_session_info)
+                },
+                Err(e) => {
+                    eprintln!("Client identity switch rejected by Tidal ({e}), staying on original credentials.");
+                    (client_id, client_secret, session_info)
+                },
+            }
+        };
+
         #[cfg(not(feature = "unofficial"))]
         let country_code = country_code.to_string();
 
@@ -368,6 +388,26 @@ impl Session {
         secret_combined.extend_from_slice(&secret_part2);
         
         let client_secret = String::from_utf8(BASE64.decode(&secret_combined).unwrap()).unwrap();
+
+        (client_id, client_secret)
+    }
+
+    /// Returns `(client_id, client_secret)` for a second, distinct Tidal client identity,
+    /// used only for token refreshes after the initial login — never for the login itself.
+    ///
+    /// Sourced from https://github.com/binimum/hifi-api/blob/main/tidal_auth/tidal_auth.py
+    fn get_unofficial_request_client_id_and_secret() -> (String, String) {
+        let client_id = String::from_utf8(
+            BASE64.decode(b"bHczdlI2R0UxdnROQnNqdg==").unwrap()
+        ).unwrap();
+
+        let secret_raw = String::from_utf8(
+            BASE64.decode(b"WTh0SXBxS0p4czlCRUl3WXIwSTliU2JNV0Rzb2dYSng5TGFOM21DSHdENCUzRA==").unwrap()
+        ).unwrap();
+
+        // The decoded secret ends in the literal characters "%3D" rather than "=" —
+        // this looks like a URL-encoded padding character that needs fixing up.
+        let client_secret = secret_raw.replace("%3D", "=");
 
         (client_id, client_secret)
     }
