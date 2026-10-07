@@ -163,18 +163,11 @@ impl Track {
         })
     }
 
-    /// Returns a reference to the `TrackManifest` associated with this track.
+    /// Returns the `TrackManifest` associated with this track.
     /// 
-    /// If `prefetch = true`, `TrackManifest` is cached within `self`,
-    /// but Tidal will not count this request as a stream/play.
-    /// 
-    /// If `prefetch = false`, the request is not cached, and Tidal
-    /// will count it as a stream/play.
-    pub fn get_manifest(&self, prefetch: bool) -> Result<TrackManifest, String> {
-        if !prefetch {
-            return self._get_new_manifest(prefetch);
-        }
-
+    /// The resulting `TrackManifest` is cached within `self` as long as it is valid,
+    /// but Tidal ***will not*** count this request as a stream/play.
+    pub fn get_manifest(&self) -> Result<TrackManifest, String> {
         let mut cached_manifest = self.cached_manifest.lock().map_err(|e| format!("{e:#?}"))?;
         let quality = self.session.get_audio_quality();
 
@@ -184,7 +177,7 @@ impl Track {
         });
 
         if is_missing || is_stale {
-            let manifest = self._get_new_manifest(prefetch)?;
+            let manifest = self._get_new_manifest(true)?;
             
             let expires_at: i64 = manifest.uri
                 .split("token=")
@@ -198,6 +191,14 @@ impl Track {
         }
 
         Ok(cached_manifest.as_ref().unwrap().manifest.clone())
+    }
+
+    /// Returns the `TrackManifest` associated with this track,
+    /// 
+    /// Unlike `Track::get_manifest()`, the resulting `TrackManifest` is *not* cached,
+    /// but Tidal ***will*** count this request as a stream/play.
+    pub fn get_manifest_counted(&self) -> Result<TrackManifest, String> {
+        self._get_new_manifest(false)
     }
 
     fn _get_new_manifest(&self, prefetch: bool) -> Result<TrackManifest, String> {

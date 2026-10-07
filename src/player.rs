@@ -239,7 +239,7 @@ impl Player {
                             let current_track = Arc::clone(unlocked_player.current_track.as_ref().unwrap());
 
                             unlocked_player.tokio_rt.spawn_blocking(move || {
-                                let _ = current_track.get_manifest(false);
+                                let _ = current_track.get_manifest_counted();
                             });
 
                             unlocked_player.has_confirmed_play = true;
@@ -367,7 +367,7 @@ impl Player {
         let track_attributes = track.get_attribtues()?;
         let album = track.get_album()?;
 
-        let manifest = track.get_manifest(true)?;
+        let manifest = track.get_manifest()?;
         let parsed_manifest = Self::parse_manifest(&manifest.uri)?;
 
         let track_title = &track_attributes.title;
@@ -402,6 +402,7 @@ impl Player {
         })?;
         self.controls.set_playback(MediaPlayback::Playing { progress: None })?;
 
+        // Fetch all the track's segments asynchronously so we can start playing right away.
         let (mut writer, reader) = tokio::io::duplex(512 * 1024);
 
         let client = self.async_request_client.clone();
@@ -449,7 +450,7 @@ impl Player {
                 let _ = next_track.get_attribtues();
                 let _ = next_track.get_album();
                 let _ = next_track.get_artist();
-                let _ = next_track.get_manifest(true);
+                let _ = next_track.get_manifest();
             });
         }
 
