@@ -49,6 +49,16 @@ struct SessionInfo {
     expires_at: i64,
 }
 
+impl SessionInfo {
+    pub fn save(&self, session_file: &Path) -> Result<(), String> {
+        let toml_str = toml::to_string(&self)
+            .map_err(|e| format!("{e}"))?;
+        fs::write(&session_file, toml_str)
+            .map_err(|e| format!("{e}"))?;
+        Ok(())
+    }
+}
+
 /// A currently logged in Tidal session.
 #[derive(Debug)]
 pub struct Session {
@@ -87,7 +97,7 @@ impl Session {
         let (client_id, client_secret) = (client_id.to_owned(), client_secret.to_owned());
 
         #[cfg(feature = "unofficial")]
-        let (client_id, client_secret) = Self::get_unofficial_client_id_and_secret();
+        let (client_id, client_secret) = Self::get_unofficial_auth_client_id_and_secret();
             
         let session_info = Self::get_session(
             &request_client,
@@ -95,6 +105,24 @@ impl Session {
             &client_id,
             &client_secret
         )?;
+
+        #[cfg(feature = "unofficial")]
+        // Perform a client_id switcharoo on the access token to get play tracking to work again.
+        let (client_id, client_secret, session_info) = {
+            let (request_client_id, request_client_secret) = Self::get_unofficial_client_id_and_secret();
+
+            match Self::refresh_access_token(&request_client, &session_info.refresh_token, &request_client_id, &request_client_secret) {
+                Ok(switched_session_info) => {
+                    switched_session_info.save(&session_file)?;
+
+                    (request_client_id, request_client_secret, switched_session_info)
+                },
+                Err(e) => {
+                    eprintln!("Client identity switch rejected by Tidal ({e}), staying on original credentials.");
+                    (client_id, client_secret, session_info)
+                },
+            }
+        };
 
         #[cfg(not(feature = "unofficial"))]
         let country_code = country_code.to_string();
@@ -127,10 +155,7 @@ impl Session {
                 // Get new access token from existing refresh token.
                 match Self::refresh_access_token(request_client, &existing.refresh_token, client_id, client_secret) {
                     Ok(session_info) => {
-                        let toml_str = toml::to_string(&session_info)
-                            .map_err(|e| format!("{e}"))?;
-                        fs::write(session_file, toml_str)
-                            .map_err(|e| format!("{e}"))?;
+                        session_info.save(session_file)?;
 
                         return Ok(session_info);
                     },
@@ -150,10 +175,7 @@ impl Session {
         // No valid session — perform new device auth login.
         let new_session = Self::new_device_auth_login(request_client, client_id, client_secret)?;
 
-        let toml_str = toml::to_string(&new_session)
-            .map_err(|e| format!("{e}"))?;
-        fs::write(session_file, toml_str)
-            .map_err(|e| format!("{e}"))?;
+        new_session.save(session_file)?;
 
         Ok(new_session)
     }
@@ -171,12 +193,9 @@ impl Session {
                 &self.client_secret
             )?;
 
-            *session_info = new_session_info;
+            new_session_info.save(&self.session_file)?;
 
-            let toml_str = toml::to_string(&(*session_info))
-                .map_err(|e| format!("{e}"))?;
-            fs::write(&self.session_file, toml_str)
-                .map_err(|e| format!("{e}"))?;
+            *session_info = new_session_info;
         }
 
         Ok(session_info.access_token.clone())
@@ -352,7 +371,7 @@ impl Session {
     /// Returns `(client_id, client_secret)` to be used for unofficial API auth.
     /// 
     /// The client_id and client_secret values were taken from https://github.com/EbbLabs/python-tidal/blob/main/tidalapi/session.py.
-    fn get_unofficial_client_id_and_secret() -> (String, String) {
+    fn get_unofficial_auth_client_id_and_secret() -> (String, String) {
         let id_part1 = BASE64.decode(b"WmxneVNuaGtiVzUw").unwrap();
         let id_part2 = BASE64.decode(b"V2xkTE1HbDRWQT09").unwrap();
         
@@ -368,6 +387,26 @@ impl Session {
         secret_combined.extend_from_slice(&secret_part2);
         
         let client_secret = String::from_utf8(BASE64.decode(&secret_combined).unwrap()).unwrap();
+
+        (client_id, client_secret)
+    }
+
+    /// Returns `(client_id, client_secret)` to be used for unofficial API requests.
+    /// Not to be used for auth.
+    ///
+    /// Sourced from https://github.com/binimum/hifi-api/blob/main/tidal_auth/tidal_auth.py
+    fn get_unofficial_client_id_and_secret() -> (String, String) {
+        let client_id = String::from_utf8(
+            BASE64.decode(b"bHczdlI2R0UxdnROQnNqdg==").unwrap()
+        ).unwrap();
+
+        let secret_raw = String::from_utf8(
+            BASE64.decode(b"WTh0SXBxS0p4czlCRUl3WXIwSTliU2JNV0Rzb2dYSng5TGFOM21DSHdENCUzRA==").unwrap()
+        ).unwrap();
+
+        // The decoded secret ends in the literal characters "%3D" rather than "=",
+        // this looks like a URL-encoded padding character that needs fixing up.
+        let client_secret = secret_raw.replace("%3D", "=");
 
         (client_id, client_secret)
     }
