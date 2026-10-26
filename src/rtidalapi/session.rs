@@ -42,7 +42,7 @@ use official_only_imports::*;
 use super::AudioQuality;
 
 /// Struct used to persist session info.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct SessionInfo {
     access_token: String,
     refresh_token: String,
@@ -65,6 +65,16 @@ pub struct Session {
     session_info: Mutex<SessionInfo>,
     client_id: String,
     client_secret: String,
+
+    // We store a second session whose manifest fetches *are* counted by Tidal,
+    // so we use this second session for counting track plays.
+    #[cfg(feature = "unofficial")]
+    secondary_session_info: Mutex<SessionInfo>,
+    #[cfg(feature = "unofficial")]
+    secondary_client_id: String,
+    #[cfg(feature = "unofficial")]
+    secondary_client_secret: String,
+    
     country_code: String,
     session_file: PathBuf,
     request_client: Client,
@@ -97,7 +107,7 @@ impl Session {
         let (client_id, client_secret) = (client_id.to_owned(), client_secret.to_owned());
 
         #[cfg(feature = "unofficial")]
-        let (client_id, client_secret) = Self::get_unofficial_auth_client_id_and_secret();
+        let (client_id, client_secret) = Self::get_unofficial_client_id_and_secret();
             
         let session_info = Self::get_session(
             &request_client,
@@ -107,19 +117,16 @@ impl Session {
         )?;
 
         #[cfg(feature = "unofficial")]
-        // Perform a client_id switcharoo on the access token to get play tracking to work again.
-        let (client_id, client_secret, session_info) = {
-            let (request_client_id, request_client_secret) = Self::get_unofficial_client_id_and_secret();
+        let (secondary_client_id, secondary_client_secret, secondary_session_info) = {
+            let (secondary_client_id, secondary_client_secret) = Self::get_unofficial_secondary_client_id_and_secret();
 
-            match Self::refresh_access_token(&request_client, &session_info.refresh_token, &request_client_id, &request_client_secret) {
-                Ok(switched_session_info) => {
-                    switched_session_info.save(&session_file)?;
-
-                    (request_client_id, request_client_secret, switched_session_info)
+            match Self::refresh_access_token(&request_client, &session_info.refresh_token, &secondary_client_id, &secondary_client_secret) {
+                Ok(secondary_session_info) => {
+                    (secondary_client_id, secondary_client_secret, secondary_session_info)
                 },
                 Err(e) => {
                     eprintln!("Client identity switch rejected by Tidal ({e}), staying on original credentials.");
-                    (client_id, client_secret, session_info)
+                    (client_id.clone(), client_secret.clone(), session_info.clone())
                 },
             }
         };
@@ -134,6 +141,14 @@ impl Session {
             session_info: Mutex::new(session_info),
             client_id,
             client_secret,
+
+            #[cfg(feature = "unofficial")]
+            secondary_session_info: Mutex::new(secondary_session_info),
+            #[cfg(feature = "unofficial")]
+            secondary_client_id,
+            #[cfg(feature = "unofficial")]
+            secondary_client_secret,
+
             country_code,
             session_file,
             request_client,
@@ -239,18 +254,24 @@ impl Session {
 
     /// Makes a GET request to the Tidal API.
     pub(super) fn get(&self, endpoint: &str) -> Result<JSONValue, String> {
-        self.get_with_headers(endpoint, vec![])
+        let access_token = self.refresh_if_needed()?;
+        self._get(endpoint, vec![], access_token)
     }
 
     /// Makes a GET request with headers to the Tidal API.
+    #[allow(unused)]
     pub(super) fn get_with_headers(&self, endpoint: &str, headers: Vec<(&str, &str)>) -> Result<JSONValue, String> {
+        let access_token = self.refresh_if_needed()?;
+        self._get(endpoint, headers, access_token)
+    }
+
+    /// Makes a GET request to the Tidal API - common code.
+    fn _get(&self, endpoint: &str, headers: Vec<(&str, &str)>, access_token: String) -> Result<JSONValue, String> {
         let url = if endpoint.contains("?") {
             format!("{}{}&countryCode={}", Self::BASE_URL, endpoint, self.country_code)
         } else {
             format!("{}{}?countryCode={}", Self::BASE_URL, endpoint, self.country_code)
         };
-
-        let access_token = self.refresh_if_needed()?;
 
         let mut req = self.request_client.get(url)
             .bearer_auth(&access_token);
@@ -378,10 +399,10 @@ impl Session {
     /// URL for the unofficial Tidal API device auth.
     const DEVICE_AUTH_URL: &str   = "https://auth.tidal.com/v1/oauth2/device_authorization";
 
-    /// Returns `(client_id, client_secret)` to be used for unofficial API auth.
+    /// Returns `(client_id, client_secret)` to be used for unofficial API requests.
     /// 
     /// The client_id and client_secret values were taken from https://github.com/EbbLabs/python-tidal/blob/main/tidalapi/session.py.
-    fn get_unofficial_auth_client_id_and_secret() -> (String, String) {
+    fn get_unofficial_client_id_and_secret() -> (String, String) {
         let id_part1 = BASE64.decode(b"WmxneVNuaGtiVzUw").unwrap();
         let id_part2 = BASE64.decode(b"V2xkTE1HbDRWQT09").unwrap();
         
@@ -401,11 +422,11 @@ impl Session {
         (client_id, client_secret)
     }
 
-    /// Returns `(client_id, client_secret)` to be used for unofficial API requests.
+    /// Returns a secondary set of `(client_id, client_secret)` to be used for unofficial API requests.
     /// Not to be used for auth.
     ///
     /// Sourced from https://github.com/binimum/hifi-api/blob/main/tidal_auth/tidal_auth.py
-    fn get_unofficial_client_id_and_secret() -> (String, String) {
+    fn get_unofficial_secondary_client_id_and_secret() -> (String, String) {
         let client_id = String::from_utf8(
             BASE64.decode(b"bHczdlI2R0UxdnROQnNqdg==").unwrap()
         ).unwrap();
@@ -528,6 +549,33 @@ impl Session {
         json["countryCode"].as_str()
             .ok_or_else(|| "No countryCode in session response".to_string())
             .map(|s| s.to_string())
+    }
+
+    /// Checks if this `Session`'s `secondary_session_info`'s current access token is expired,
+    /// refreshes it if needed, and returns a valid access token.
+    /// 
+    /// This function does *not* save the returned session info to file, unlike `refresh_if_needed`.
+    pub fn refresh_secondary_session_if_needed(&self) -> Result<String, String> {
+        let mut secondary_session_info = self.secondary_session_info.lock().unwrap();
+
+        if secondary_session_info.expires_at <= Utc::now().timestamp() {
+            let new_session_info = Self::refresh_access_token(
+                &self.request_client, 
+                &secondary_session_info.refresh_token, 
+                &self.secondary_client_id, 
+                &self.secondary_client_secret
+            )?;
+
+            *secondary_session_info = new_session_info;
+        }
+
+        Ok(secondary_session_info.access_token.clone())
+    }
+
+    /// Makes a GET request to the Tidal API using the secondary session info.
+    pub(super) fn get_with_secondary_session(&self, endpoint: &str) -> Result<JSONValue, String> {
+        let secondary_access_token = self.refresh_secondary_session_if_needed()?;
+        self._get(endpoint, vec![], secondary_access_token)
     }
 
     /// Makes a GET request to the unofficial Tidal API.

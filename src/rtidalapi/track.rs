@@ -16,7 +16,6 @@ use once_cell::sync::OnceCell;
 use regex::Regex;
 use serde::{Deserialize};
 use serde_json;
-use uuid::Uuid;
 
 use super::Album;
 use super::Artist;
@@ -165,8 +164,7 @@ impl Track {
 
     /// Returns the `TrackManifest` associated with this track.
     /// 
-    /// The resulting `TrackManifest` is cached within `self` as long as it is valid,
-    /// but Tidal ***will not*** count this request as a stream/play.
+    /// The resulting `TrackManifest` is cached within `self` as long as it is valid.
     pub fn get_manifest(&self) -> Result<TrackManifest, String> {
         let mut cached_manifest = self.cached_manifest.lock().map_err(|e| format!("{e:#?}"))?;
         let quality = self.session.get_audio_quality();
@@ -177,7 +175,38 @@ impl Track {
         });
 
         if is_missing || is_stale {
-            let manifest = self._get_new_manifest(true)?;
+            let mut endpoint = format!(
+                "/trackManifests/{}?manifestType=MPEG_DASH&uriScheme=DATA&usage=PLAYBACK&adaptive=false",
+                self.id
+            );
+
+            let quality = self.session.get_audio_quality();
+
+            if quality >= AudioQuality::Low96 {
+                endpoint.push_str("&formats=HEAACV1");
+            }
+            if quality >= AudioQuality::Low320 {
+                endpoint.push_str("&formats=AACLC");
+            }
+            if quality >= AudioQuality::High {
+                endpoint.push_str("&formats=FLAC");
+            }
+            if quality >= AudioQuality::Max {
+                endpoint.push_str("&formats=FLAC_HIRES");
+            }
+
+            let mut data_json = self.session.get(&endpoint)?["data"].take();
+            let attributes_json = data_json["attributes"].take();
+
+            let mut manifest: TrackManifest = serde_json::from_value(attributes_json)
+                .map_err(|e| format!("Unable to parse track manifest API response: {}", e.to_string()))?;
+
+            let (_, encoded_xml) = manifest.uri.split_once(",")
+                .ok_or("Unable to parse manifest XML")?;
+            let decoded_xml = BASE64.decode(encoded_xml)
+                .map_err(|e| format!("Unable to parse manifest XML: {}", e.to_string()))?;
+            manifest.uri = String::from_utf8(decoded_xml)
+                .map_err(|e| format!("Unable to parse manifest XML: {}", e.to_string()))?;
             
             let expires_at: i64 = manifest.uri
                 .split("token=")
@@ -191,62 +220,6 @@ impl Track {
         }
 
         Ok(cached_manifest.as_ref().unwrap().manifest.clone())
-    }
-
-    /// Returns the `TrackManifest` associated with this track,
-    /// 
-    /// Unlike `Track::get_manifest()`, the resulting `TrackManifest` is *not* cached,
-    /// but Tidal ***will*** count this request as a stream/play.
-    pub fn get_manifest_counted(&self) -> Result<TrackManifest, String> {
-        self._get_new_manifest(false)
-    }
-
-    fn _get_new_manifest(&self, prefetch: bool) -> Result<TrackManifest, String> {
-        let mut endpoint = format!(
-            "/trackManifests/{}?manifestType=MPEG_DASH&uriScheme=DATA&usage=PLAYBACK&adaptive=false",
-            self.id
-        );
-
-        let quality = self.session.get_audio_quality();
-
-        if quality >= AudioQuality::Low96 {
-            endpoint.push_str("&formats=HEAACV1");
-        }
-        if quality >= AudioQuality::Low320 {
-            endpoint.push_str("&formats=AACLC");
-        }
-        if quality >= AudioQuality::High {
-            endpoint.push_str("&formats=FLAC");
-        }
-        if quality >= AudioQuality::Max {
-            endpoint.push_str("&formats=FLAC_HIRES");
-        }
-
-        let mut data_json = if prefetch {
-            let playback_session_id = Uuid::new_v4().to_string();
-
-            let headers = vec![
-                ("x-playback-session-id", playback_session_id.as_str())
-            ];
-
-            self.session.get_with_headers(&endpoint, headers)?["data"].take()
-        } else {
-            self.session.get(&endpoint)?["data"].take()
-        };
-
-        let attributes_json = data_json["attributes"].take();
-
-        let mut manifest: TrackManifest = serde_json::from_value(attributes_json)
-            .map_err(|e| format!("Unable to parse track manifest API response: {}", e.to_string()))?;
-
-        let (_, encoded_xml) = manifest.uri.split_once(",")
-            .ok_or("Unable to parse manifest XML")?;
-        let decoded_xml = BASE64.decode(encoded_xml)
-            .map_err(|e| format!("Unable to parse manifest XML: {}", e.to_string()))?;
-        manifest.uri = String::from_utf8(decoded_xml)
-            .map_err(|e| format!("Unable to parse manifest XML: {}", e.to_string()))?;
-        
-        Ok(manifest)
     }
 
     /// Returns true if this Track already contains its attributes, album, and artist information.
@@ -305,5 +278,35 @@ impl Track {
         }
 
         Ok(cache.as_ref().unwrap().0.clone())
+    }
+
+    /// Attempts to tell Tidal to count a playback session for this track.
+    ///
+    /// Hack: curerntly we just refetch the manifest using a client_id that Tidal
+    /// counts /trackManifest calls from as plays.
+    pub fn count_play(&self) -> Result<(), String> {
+        let mut endpoint = format!(
+            "/trackManifests/{}?manifestType=MPEG_DASH&uriScheme=DATA&usage=PLAYBACK&adaptive=false",
+            self.id
+        );
+
+        let quality = self.session.get_audio_quality();
+
+        if quality >= AudioQuality::Low96 {
+            endpoint.push_str("&formats=HEAACV1");
+        }
+        if quality >= AudioQuality::Low320 {
+            endpoint.push_str("&formats=AACLC");
+        }
+        if quality >= AudioQuality::High {
+            endpoint.push_str("&formats=FLAC");
+        }
+        if quality >= AudioQuality::Max {
+            endpoint.push_str("&formats=FLAC_HIRES");
+        }
+
+        self.session.get_with_secondary_session(&endpoint)?;
+
+        Ok(())
     }
 }

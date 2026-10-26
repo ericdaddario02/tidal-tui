@@ -234,12 +234,12 @@ impl Player {
 
                         // If we have listened to the current track past the VALID_PLAYBACK threshold,
                         // refetch the track's manifest with prefetch=false so Tidal will count this as a stream/play.
-                        #[cfg(not(debug_assertions))]
+                        #[cfg(all(feature = "unofficial", not(debug_assertions)))]
                         if !unlocked_player.has_confirmed_play && position > Player::VALID_PLAYBACK_SESSION_DURATION {
                             let current_track = Arc::clone(unlocked_player.current_track.as_ref().unwrap());
 
                             unlocked_player.tokio_rt.spawn_blocking(move || {
-                                let _ = current_track.get_manifest_counted();
+                                let _ = current_track.count_play();
                             });
 
                             unlocked_player.has_confirmed_play = true;
@@ -441,6 +441,7 @@ impl Player {
         self.current_track = Some(track);
         self.parsed_manifest = Some(parsed_manifest);
         self.is_playing = true;
+        self.has_confirmed_play = false;
 
         // Prefetch the next track's info to reduce delay between tracks.
         if let Some(next_track) = self.queue.get(0) {
@@ -567,7 +568,6 @@ impl Player {
             if let Some(next_track) = self.queue.pop_front() {
                 self.queue_history.push_back(current_track);
                 self.play_new_track(next_track)?;
-                self.has_confirmed_play = false;
             } else {
                 // No next tracks. Just start the same track over again (same as Tidal).
                 self.current_track = Some(current_track);
@@ -585,7 +585,6 @@ impl Player {
             if let Some(prev_track) = self.queue_history.pop_back() {
                 self.queue.push_front(current_track);
                 self.play_new_track(prev_track)?;
-                self.has_confirmed_play = false;
             } else {
                 // No previous tracks. Just start the same track over again (same as Tidal).
                 self.current_track = Some(current_track);
@@ -605,7 +604,9 @@ impl Player {
             // backwards seeks by refetching and rebuilding the track's Decoder
             if position < self.sink.get_pos() {
                 let track = self.current_track.take().unwrap();
+                let was_confirmed = self.has_confirmed_play;
                 self.play_new_track(track)?;
+                self.has_confirmed_play = was_confirmed;
             }
 
             self.sink.try_seek(position)?;
